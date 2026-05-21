@@ -89,6 +89,12 @@ To see which versions are being dropped, run Composer with the verbose flag (`-v
 composer update -v
 ```
 
+## 🙏 Credits
+
+This package is a fork of [`cotonet/soak-time`](https://github.com/cotonet-resiliencia-digital/composer-soak-time) by **Cotonet - Resiliência Digital**. Huge thanks to the original authors for building such a thoughtful defense against supply chain attacks and for releasing it as open source — this fork simply builds on their excellent work.
+
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+Copyright belongs to the original authors, Cotonet - Resiliência Digital, and to Innobrain GmbH for the changes made in this fork.
