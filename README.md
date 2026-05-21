@@ -51,6 +51,8 @@ SOAK_TIME_HOURS=336 composer update
 $env:SOAK_TIME_HOURS=336; composer update
 ```
 
+If the value isn't a non-negative integer (for example a typo), the plugin ignores it and prints a warning rather than silently disabling protection.
+
 ### Whitelisting Packages
 
 Some packages, like security advisories or internal company packages, need to be updated constantly and should bypass the soak time filter. You can allow them permanently by adding an array of package names to `soak-time-whitelist` in your `composer.json`:
@@ -80,6 +82,8 @@ SOAK_TIME_SKIP=1 composer update vendor/package-name
 ```powershell
 $env:SOAK_TIME_SKIP=1; composer update vendor/package-name
 ```
+
+> **Note:** `SOAK_TIME_SKIP` disables the soak-time filter for **every package in the run**, not only the ones named on the command line. Use it deliberately and sparingly.
 
 ## 🔍 Debugging
 
