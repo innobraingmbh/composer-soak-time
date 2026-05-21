@@ -87,11 +87,31 @@ $env:SOAK_TIME_SKIP=1; composer update vendor/package-name
 
 ## 🔍 Debugging
 
-To see which versions are being dropped, run Composer with the verbose flag (`-v`):
+To see exactly which versions are being dropped, run Composer with the verbose flag (`-v`). Dropped versions are grouped per package:
 
 ```bash
 composer update -v
 ```
+
+```
+[Soak Time] Inspecting packages (minimum age: 168h)...
+  monolog/monolog — dropped 3 version(s) newer than 168h: 3.8.2, 3.8.3, 3.8.4 (newest released 2026-05-20 14:30)
+[Soak Time] Filtered out 3 recent version(s) across 1 package(s).
+```
+
+## 🧩 When Resolution Fails
+
+If the soak time hides **every** available version of a required package, Composer can no longer resolve your dependencies. Rather than letting it fail with a cryptic solver error, the plugin detects this and warns you up front — naming the package responsible and how new its latest version is:
+
+```
+[Soak Time] Every version of "vendor/package" was filtered out (newest is only 6h old; soak time is 168h).
+            If Composer now fails to resolve dependencies, this is the likely cause. Options:
+              - Lower the soak time:  SOAK_TIME_HOURS=6 composer update
+              - Whitelist it:         add "vendor/package" to extra.soak-time-whitelist
+              - Emergency bypass:     SOAK_TIME_SKIP=1 composer update
+```
+
+Pick whichever fix suits the package: whitelist it if it legitimately needs frequent updates, or use the emergency bypass for a one-off install. Both are described above.
 
 ## 🙏 Credits
 
