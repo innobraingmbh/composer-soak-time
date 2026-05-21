@@ -1,4 +1,4 @@
-# Cotonet Soak Time 🛡️
+# Innobrain Soak Time 🛡️
 
 A Composer plugin designed to mitigate **Supply Chain Attacks** by enforcing a "soak time" (minimum age) on all installed package versions.
 
@@ -15,12 +15,12 @@ Composer will then gracefully resolve your dependencies using older, safer versi
 Install this plugin as a development dependency:
 
 ```bash
-composer require --dev cotonet/soak-time
+composer require --dev innobrain/soak-time
 ```
 
 *Or install it globally to protect all your local projects:*
 ```bash
-composer global require cotonet/soak-time
+composer global require innobrain/soak-time
 ```
 
 ## ⚙️ Configuration

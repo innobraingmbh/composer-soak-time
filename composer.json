@@ -1,17 +1,18 @@
 {
-    "name": "cotonet/soak-time",
+    "name": "innobrain/soak-time",
     "description": "Protects against supply chain attacks by filtering recently published packages.",
     "type": "composer-plugin",
+    "license": "MIT",
     "require": {
         "php": "^7.4 || ^8.0 || ^8.1 || ^8.2 || ^8.3 || ^8.4 || ^8.5",
         "composer-plugin-api": "^2.0"
     },
     "autoload": {
         "psr-4": {
-            "Cotonet\\SoakTime\\": "src/"
+            "Innobrain\\SoakTime\\": "src/"
         }
     },
     "extra": {
-        "class": "Cotonet\\SoakTime\\Plugin"
+        "class": "Innobrain\\SoakTime\\Plugin"
     }
 }

@@ -1,6 +1,6 @@
 <?php
 
-namespace Cotonet\SoakTime;
+namespace Innobrain\SoakTime;
 
 use Composer\Composer;
 use Composer\IO\IOInterface;
@@ -22,7 +22,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     /** @var array<string> Packages to always allow */
     protected $whitelist = [
-        'cotonet/soak-time' // Always whitelist self to prevent lock-out
+        'innobrain/soak-time' // Always whitelist self to prevent lock-out
     ];
 
     public function activate(Composer $composer, IOInterface $io): void
