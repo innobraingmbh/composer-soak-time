@@ -37,6 +37,20 @@ Customize this in the `extra` section of your project's `composer.json`:
 }
 ```
 
+### Overriding the Soak Time per Run
+
+You can override the configured soak time for a single command using the `SOAK_TIME_HOURS` environment variable. This value is specified in **hours** and takes precedence over `soak-time-hours` in `composer.json`:
+
+**Linux / macOS:**
+```bash
+SOAK_TIME_HOURS=336 composer update
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:SOAK_TIME_HOURS=336; composer update
+```
+
 ### Whitelisting Packages
 
 Some packages, like security advisories or internal company packages, need to be updated constantly and should bypass the soak time filter. You can allow them permanently by adding an array of package names to `soak-time-whitelist` in your `composer.json`:

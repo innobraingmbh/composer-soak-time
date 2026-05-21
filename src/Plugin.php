@@ -42,6 +42,12 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             // Merge user whitelist with our default whitelist
             $this->whitelist = array_merge($this->whitelist, $extra['soak-time-whitelist']);
         }
+
+        // Environment override (in hours) takes precedence over composer.json
+        $envHours = getenv('SOAK_TIME_HOURS');
+        if ($envHours !== false && $envHours !== '') {
+            $this->minHours = (int) $envHours;
+        }
     }
 
     public function deactivate(Composer $composer, IOInterface $io): void {}
