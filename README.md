@@ -32,6 +32,14 @@ Or install globally to protect all local projects:
 composer global require innobrain/soak-time
 ```
 
+> **Upgrading from ≤ v1.3.0?** A direct `composer update` will fail because the old plugin's `SoakTimeConfig` class is still in PHP memory when the new code activates. Reinstall instead:
+>
+> ```bash
+> composer global remove innobrain/soak-time && composer global require innobrain/soak-time
+> # or, for project-local installs:
+> composer remove --dev innobrain/soak-time && composer require --dev innobrain/soak-time
+> ```
+
 ## ⚙️ Configuration
 
 Default minimum age: **168 hours (7 days)**. Override in the `extra` section of `composer.json`:
