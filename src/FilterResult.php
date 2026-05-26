@@ -21,8 +21,8 @@ final class FilterResult
     }
 
     /**
-     * Names whose every pooled version was dropped — the likely cause when
-     * Composer then fails to resolve dependencies.
+     * Names whose every pooled version was dropped — likely cause when Composer
+     * then fails to resolve dependencies.
      *
      * @return list<string>
      */

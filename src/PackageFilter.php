@@ -4,6 +4,13 @@ namespace Innobrain\SoakTime;
 
 use Composer\Package\PackageInterface;
 
+/**
+ * Defends against the new-release attack: a fresh malicious tag (typosquat,
+ * account takeover, malicious co-maintainer push). Filters by Packagist's
+ * `time` field — the committer timestamp of the tag's commit. An attacker
+ * force-pushing an *old* tag can backdate that timestamp, so this filter is
+ * NOT the defense against altered historical releases. See ReferenceDriftCheck.
+ */
 final class PackageFilter
 {
     /**

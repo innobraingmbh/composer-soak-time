@@ -1,33 +1,40 @@
 # Innobrain Soak Time 🛡️
 
-A Composer plugin designed to mitigate **Supply Chain Attacks** by enforcing a "soak time" (minimum age) on all installed package versions.
+A Composer plugin that enforces a **soak time** — a minimum age — on every package version before install. New releases stay out of the solver pool until they age past the threshold, blocking zero-day malicious releases: typosquats, account takeovers, malicious co-maintainer pushes.
 
-Recently published packages or updates can sometimes carry malicious code (zero-days or compromised maintainer accounts). This plugin acts as a shield by completely hiding recent releases from the Composer solver, ensuring you only install mature, community-vetted code.
+A release-date filter alone is defeatable: an attacker can force-push an *old* tag at a new malicious commit with a backdated `GIT_COMMITTER_DATE`, and Packagist serves the backdated timestamp. So the plugin also pins the **git SHA** and **dist sha256** of every version it sees. Those can't be backdated. If `vendor/pkg@1.2.3` later resolves to a different SHA or zip hash than the recorded one, the install hard-fails.
 
-## 💡 How it works
+One product — soak time — done in a way that holds against both fresh malicious releases and altered historical releases (the laravel-lang / intercom-php 2026 pattern).
 
-This plugin intercepts Composer's `PRE_POOL_CREATE` event. It analyzes the release dates of all requested packages (including deep transitive dependencies) and drops any version that is newer than your configured threshold. 
+## 🧭 How soak time stays honest
 
-Composer will then gracefully resolve your dependencies using older, safer versions, avoiding the "dependency hell" of manual conflict resolution.
+Three checks run on every install/update. Together they make soak time undefeatable by `GIT_COMMITTER_DATE` rewrites.
+
+| Check | Hook | Catches | Why it works |
+|---|---|---|---|
+| **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases | Drops recent versions from the solver pool until they reach minimum age. |
+| **Reference drift** (`ReferenceDriftCheck`) | `PRE_POOL_CREATE` | Altered historical releases (force-pushed tag) | The git SHA is content-addressed over the commit's tree, parents, author, committer, message, *and dates*. Backdating `GIT_COMMITTER_DATE` still yields a different SHA, and the SHA can't be forged. |
+| **Hash pinning** (`HashVerifier`) | `POST_FILE_DOWNLOAD` | Cache poisoning at `~/.composer/cache/files/` | Composer's native sha1 check is empty for GitHub-served packages; we compute sha256 ourselves and compare against the pinned value. |
+
+The timestamp filter alone is **not** enough — the SHA pin is the load-bearing primitive against altered historical releases. New pins are flushed to `composer-integrity.lock` at `POST_INSTALL_CMD` / `POST_UPDATE_CMD`.
 
 ## 📦 Installation
 
-Install this plugin as a development dependency:
+Install as a dev dependency:
 
 ```bash
 composer require --dev innobrain/soak-time
 ```
 
-*Or install it globally to protect all your local projects:*
+Or install globally to protect all local projects:
+
 ```bash
 composer global require innobrain/soak-time
 ```
 
 ## ⚙️ Configuration
 
-By default, the plugin enforces a minimum age of **168 hours (7 days)**. 
-
-Customize this in the `extra` section of your project's `composer.json`:
+Default minimum age: **168 hours (7 days)**. Override in the `extra` section of `composer.json`:
 
 ```json
 {
@@ -39,7 +46,7 @@ Customize this in the `extra` section of your project's `composer.json`:
 
 ### Overriding the Soak Time per Run
 
-You can override the configured soak time for a single command using the `SOAK_TIME_HOURS` environment variable. This value is specified in **hours** and takes precedence over `soak-time-hours` in `composer.json`:
+Override the configured soak time for a single run via the `SOAK_TIME_HOURS` environment variable (hours; takes precedence over `composer.json`):
 
 **Linux / macOS:**
 ```bash
@@ -51,11 +58,11 @@ SOAK_TIME_HOURS=336 composer update
 $env:SOAK_TIME_HOURS=336; composer update
 ```
 
-If the value isn't a non-negative integer (for example a typo), the plugin ignores it and prints a warning rather than silently disabling protection.
+If the value isn't a non-negative integer (e.g. a typo), the plugin ignores it and warns rather than silently disabling protection.
 
 ### Whitelisting Packages
 
-Some packages, like security advisories or internal company packages, need to be updated constantly and should bypass the soak time filter. You can allow them permanently by adding an array of package names to `soak-time-whitelist` in your `composer.json`:
+Some packages need to update constantly — security advisories, internal company packages — and should bypass the soak filter. Whitelist them permanently via `soak-time-whitelist`:
 
 ```json
 {
@@ -69,9 +76,31 @@ Some packages, like security advisories or internal company packages, need to be
 }
 ```
 
+## 🔐 Integrity lock file
+
+The plugin maintains `composer-integrity.lock` next to `composer.json`. For every package version installed, it records:
+
+- `sha256` of the downloaded zip
+- `sourceReference` (git commit SHA)
+- `distUrl`
+- `firstSeenAt` timestamp
+
+**Commit this file alongside `composer.lock`.** On every subsequent install, the SHA and zip hash for each `name@version` are verified against the recorded values. Any drift hard-fails the run — the signal of an altered historical release.
+
+Opt out (not recommended) with `extra.soak-time-integrity: false`, or relocate the file via `extra.soak-time-integrity-lock`.
+
+```json
+{
+    "extra": {
+        "soak-time-integrity": true,
+        "soak-time-integrity-lock": "composer-integrity.lock"
+    }
+}
+```
+
 ## 🚨 Emergency Bypass (Security Patches)
 
-If you need to install a critical security patch that was released just a few hours ago, you can bypass the filter using the `SOAK_TIME_SKIP` environment variable:
+To install a critical security patch released hours ago, bypass the filter with `SOAK_TIME_SKIP`:
 
 **Linux / macOS:**
 ```bash
@@ -83,11 +112,11 @@ SOAK_TIME_SKIP=1 composer update vendor/package-name
 $env:SOAK_TIME_SKIP=1; composer update vendor/package-name
 ```
 
-> **Note:** `SOAK_TIME_SKIP` disables the soak-time filter for **every package in the run**, not only the ones named on the command line. Use it deliberately and sparingly.
+> **Note:** `SOAK_TIME_SKIP` disables **all protections** (soak, drift check, hash pinning) for **every package in the run**, not just the ones named on the command line. Use deliberately and sparingly.
 
 ## 🔍 Debugging
 
-To see exactly which versions are being dropped, run Composer with the verbose flag (`-v`). Dropped versions are grouped per package:
+Run with `-v` to see which versions are dropped. Output is grouped per package:
 
 ```bash
 composer update -v
@@ -101,7 +130,7 @@ composer update -v
 
 ## 🧩 When Resolution Fails
 
-If the soak time hides **every** available version of a required package, Composer can no longer resolve your dependencies. Rather than letting it fail with a cryptic solver error, the plugin detects this and warns you up front — naming the package responsible and how new its latest version is:
+If the soak time hides **every** available version of a required package, Composer can't resolve dependencies. The plugin detects this up front and names the responsible package along with its latest version's age, instead of leaving a cryptic solver error:
 
 ```
 [Soak Time] Every version of "vendor/package" was filtered out (newest is only 6h old; soak time is 168h).
@@ -111,14 +140,14 @@ If the soak time hides **every** available version of a required package, Compos
               - Emergency bypass:     SOAK_TIME_SKIP=1 composer update
 ```
 
-Pick whichever fix suits the package: whitelist it if it legitimately needs frequent updates, or use the emergency bypass for a one-off install. Both are described above.
+Whitelist the package if it legitimately needs frequent updates; use the emergency bypass for a one-off install.
 
 ## 🙏 Credits
 
-This package is a fork of [`cotonet/soak-time`](https://github.com/cotonet-resiliencia-digital/composer-soak-time) by **Cotonet - Resiliência Digital**. Huge thanks to the original authors for building such a thoughtful defense against supply chain attacks and for releasing it as open source — this fork simply builds on their excellent work.
+Fork of [`cotonet/soak-time`](https://github.com/cotonet-resiliencia-digital/composer-soak-time) by **Cotonet - Resiliência Digital**. Thanks to the original authors for the foundation this fork builds on.
 
 ## 📄 License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE).
 
-Copyright belongs to the original authors, Cotonet - Resiliência Digital, and to Innobrain GmbH for the changes made in this fork.
+Copyright Cotonet - Resiliência Digital (original) and Innobrain GmbH (fork).

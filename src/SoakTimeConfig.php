@@ -6,19 +6,20 @@ final class SoakTimeConfig
 {
     /**
      * @param  list<string>  $whitelist
+     * @param  bool  $bypass  Emergency switch (SOAK_TIME_SKIP=1) — disables soak filtering AND integrity checks.
      */
     public function __construct(
         public readonly int $minHours,
         public readonly array $whitelist,
         public readonly bool $bypass,
+        public readonly bool $integrity = true,
+        public readonly string $integrityLockPath = 'composer-integrity.lock',
     ) {}
 
     /**
-     * Parse a raw "soak time hours" value into a non-negative integer.
-     *
-     * Returns null when the value is anything other than a non-negative
-     * integer, so the caller can warn and fall back instead of silently
-     * disabling protection (for example when an env var holds a typo).
+     * Parse a raw soak-time-hours value into a non-negative integer. Returns
+     * null on anything else (e.g. an env var with a typo) so the caller can
+     * warn and fall back instead of silently disabling protection.
      */
     public static function parseHours(mixed $raw): ?int
     {

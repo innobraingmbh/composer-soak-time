@@ -4,11 +4,15 @@ namespace Innobrain\SoakTime;
 
 use Composer\Composer;
 use Composer\EventDispatcher\EventSubscriberInterface;
+use Composer\Factory;
 use Composer\IO\IOInterface;
 use Composer\Package\PackageInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
+use Composer\Plugin\PostFileDownloadEvent;
 use Composer\Plugin\PrePoolCreateEvent;
+use Composer\Script\ScriptEvents;
+use Composer\Util\Filesystem;
 
 class Plugin implements PluginInterface, EventSubscriberInterface
 {
@@ -21,10 +25,13 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private SoakTimeConfig $config;
 
+    private IntegrityLockFile $lockFile;
+
     public function activate(Composer $composer, IOInterface $io): void
     {
         $this->io = $io;
         $this->config = $this->resolveConfig($composer->getPackage()->getExtra());
+        $this->lockFile = IntegrityLockFile::load($this->resolveLockPath());
     }
 
     public function deactivate(Composer $composer, IOInterface $io): void {}
@@ -35,6 +42,9 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     {
         return [
             PluginEvents::PRE_POOL_CREATE => 'onPrePoolCreate',
+            PluginEvents::POST_FILE_DOWNLOAD => 'onPostFileDownload',
+            ScriptEvents::POST_INSTALL_CMD => 'onPostCommand',
+            ScriptEvents::POST_UPDATE_CMD => 'onPostCommand',
         ];
     }
 
@@ -42,11 +52,15 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     {
         if ($this->config->bypass) {
             $this->io->writeError(
-                '<warning>[Soak Time] Emergency bypass active (SOAK_TIME_SKIP=1) — soak time is '
-                .'DISABLED for ALL packages in this run, not just the ones named on the command line.</warning>'
+                '<warning>[Soak Time] Emergency bypass active (SOAK_TIME_SKIP=1) — all protections '
+                .'disabled for this run.</warning>'
             );
 
             return;
+        }
+
+        if ($this->config->integrity) {
+            (new ReferenceDriftCheck($this->lockFile))->verify($event->getPackages());
         }
 
         $this->io->write(sprintf(
@@ -67,11 +81,38 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $event->setPackages($result->keptPackages);
     }
 
+    public function onPostFileDownload(PostFileDownloadEvent $event): void
+    {
+        if ($this->config->bypass || ! $this->config->integrity) {
+            return;
+        }
+
+        (new HashVerifier($this->lockFile, $this->io))->verify($event);
+    }
+
+    public function onPostCommand(): void
+    {
+        if ($this->config->bypass || ! $this->config->integrity) {
+            return;
+        }
+
+        $this->lockFile->save();
+    }
+
+    private function resolveLockPath(): string
+    {
+        $configured = $this->config->integrityLockPath;
+
+        if ((new Filesystem())->isAbsolutePath($configured)) {
+            return $configured;
+        }
+
+        return dirname(Factory::getComposerFile()).DIRECTORY_SEPARATOR.$configured;
+    }
+
     /**
-     * Resolve the runtime configuration, reporting any invalid input as it goes.
-     *
-     * The message wording lives here, next to the IO it is written to, rather
-     * than inside the config value object.
+     * Resolve runtime config, reporting invalid input as it goes. Message
+     * wording lives here, next to the IO it writes to, not in the value object.
      *
      * @param  array<string, mixed>  $extra
      */
@@ -122,7 +163,43 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $whitelist = array_merge($whitelist, array_values($extra['soak-time-whitelist']));
         }
 
-        return new SoakTimeConfig($minHours, $whitelist, getenv('SOAK_TIME_SKIP') === '1');
+        $integrity = true;
+
+        if (array_key_exists('soak-time-integrity', $extra)) {
+            $raw = $extra['soak-time-integrity'];
+
+            if (is_bool($raw)) {
+                $integrity = $raw;
+            } else {
+                $this->io->writeError(
+                    '<warning>[Soak Time] Ignoring invalid "soak-time-integrity" in composer.json — '
+                    .'expected a boolean. Leaving integrity checks enabled.</warning>'
+                );
+            }
+        }
+
+        $integrityLockPath = 'composer-integrity.lock';
+
+        if (isset($extra['soak-time-integrity-lock'])) {
+            $raw = $extra['soak-time-integrity-lock'];
+
+            if (is_string($raw) && $raw !== '') {
+                $integrityLockPath = $raw;
+            } else {
+                $this->io->writeError(
+                    '<warning>[Soak Time] Ignoring invalid "soak-time-integrity-lock" in composer.json — '
+                    .'expected a non-empty string. Using "composer-integrity.lock".</warning>'
+                );
+            }
+        }
+
+        return new SoakTimeConfig(
+            $minHours,
+            $whitelist,
+            getenv('SOAK_TIME_SKIP') === '1',
+            $integrity,
+            $integrityLockPath,
+        );
     }
 
     private function report(FilterResult $result): void
