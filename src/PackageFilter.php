@@ -3,6 +3,7 @@
 namespace Innobrain\SoakTime;
 
 use Composer\Package\PackageInterface;
+use Composer\Package\RootPackageInterface;
 use Composer\Repository\PlatformRepository;
 
 /**
@@ -27,6 +28,12 @@ final class PackageFilter
         $droppedByName = [];
 
         foreach ($packages as $package) {
+            if ($package instanceof RootPackageInterface) {
+                $kept[] = $package;
+
+                continue;
+            }
+
             if (PlatformRepository::isPlatformPackage($package->getName())) {
                 $kept[] = $package;
 

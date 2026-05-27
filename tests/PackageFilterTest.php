@@ -4,6 +4,7 @@ namespace Innobrain\SoakTime\Tests;
 
 use Composer\Package\Package;
 use Composer\Package\PackageInterface;
+use Composer\Package\RootPackage;
 use Innobrain\SoakTime\PackageFilter;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -77,6 +78,17 @@ final class PackageFilterTest extends TestCase
     public function it_keeps_platform_packages_without_a_release_date(): void
     {
         $package = $this->package('php', '8.4.0', null);
+
+        $result = (new PackageFilter())->filter([$package], new \DateTimeImmutable('-168 hours'), []);
+
+        $this->assertSame([$package], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_keeps_root_packages_without_a_release_date(): void
+    {
+        $package = new RootPackage('laravel/laravel', '1.0.0.0', '1.0.0+no-version-set');
 
         $result = (new PackageFilter())->filter([$package], new \DateTimeImmutable('-168 hours'), []);
 
