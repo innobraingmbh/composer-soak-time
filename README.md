@@ -2,9 +2,11 @@
 
 A Composer plugin that enforces a **soak time** — a minimum age — on every package version before install. New releases stay out of the solver pool until they age past the threshold, blocking zero-day malicious releases: typosquats, account takeovers, malicious co-maintainer pushes.
 
-A release-date filter alone is defeatable: an attacker can force-push an *old* tag at a new malicious commit with a backdated `GIT_COMMITTER_DATE`, and Packagist serves the backdated timestamp. So the plugin also pins the **git SHA** and **dist sha256** of every version it sees. Those can't be backdated. If `vendor/pkg@1.2.3` later resolves to a different SHA or zip hash than the recorded one, the install hard-fails.
+A release-date filter alone is defeatable: an attacker can force-push an *old* tag at a new malicious commit with a backdated `GIT_COMMITTER_DATE`, and Packagist serves the backdated timestamp. So the plugin also pins the **git SHA**, source URL, dist URL, and **dist sha256** of every version it sees. Those can't be backdated. If `vendor/pkg@1.2.3` later resolves to different integrity metadata or a different zip hash than the recorded one, the install hard-fails.
 
 One product — soak time — done in a way that holds against both fresh malicious releases and altered historical releases (the laravel-lang / intercom-php 2026 pattern).
+
+See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the short threat model, guarantees, and limits.
 
 ## 🧭 How soak time stays honest
 
@@ -15,8 +17,9 @@ Three checks run on every install/update. Together they make soak time undefeata
 | **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases | Drops recent versions from the solver pool until they reach minimum age. |
 | **Reference drift** (`ReferenceDriftCheck`) | `PRE_POOL_CREATE` | Altered historical releases (force-pushed tag) | The git SHA is content-addressed over the commit's tree, parents, author, committer, message, *and dates*. Backdating `GIT_COMMITTER_DATE` still yields a different SHA, and the SHA can't be forged. |
 | **Hash pinning** (`HashVerifier`) | `POST_FILE_DOWNLOAD` | Cache poisoning at `~/.composer/cache/files/` | Composer's native sha1 check is empty for GitHub-served packages; we compute sha256 ourselves and compare against the pinned value. |
+| **Source install pinning** (`PackageIntegrityRecorder`) | `POST_PACKAGE_INSTALL` / `POST_PACKAGE_UPDATE` | `--prefer-source` and source-only installs | If no dist archive is downloaded, the installed source reference is still pinned and later checked. |
 
-The timestamp filter alone is **not** enough — the SHA pin is the load-bearing primitive against altered historical releases. New pins are flushed to `composer-integrity.lock` at `POST_INSTALL_CMD` / `POST_UPDATE_CMD`.
+The timestamp filter alone is **not** enough — the SHA/source-reference pin is the load-bearing primitive against altered historical releases. New pins are flushed to `composer-integrity.lock` at `POST_INSTALL_CMD` / `POST_UPDATE_CMD`.
 
 ## 📦 Installation
 
@@ -84,18 +87,23 @@ Some packages need to update constantly — security advisories, internal compan
 }
 ```
 
+Package versions with no release date are filtered out unless whitelisted. Add path repositories or internal repositories to the whitelist only when you intentionally trust their release metadata outside Packagist.
+
 ## 🔐 Integrity lock file
 
 The plugin maintains `composer-integrity.lock` next to `composer.json`. For every package version installed, it records:
 
-- `sha256` of the downloaded zip
+- `sha256` of the downloaded zip, when Composer installs from dist
 - `sourceReference` (git commit SHA)
+- `sourceUrl`
 - `distUrl`
 - `firstSeenAt` timestamp
 
-**Commit this file alongside `composer.lock`.** On every subsequent install, the SHA and zip hash for each `name@version` are verified against the recorded values. Any drift hard-fails the run — the signal of an altered historical release.
+**Commit this file alongside `composer.lock`.** On every subsequent install, the SHA, source reference, source URL, and dist URL for each `name@version` are verified against the recorded values. Any drift hard-fails the run — the signal of an altered historical release.
 
 Opt out (not recommended) with `extra.soak-time-integrity: false`, or relocate the file via `extra.soak-time-integrity-lock`.
+
+The first time a version is seen is trust-on-first-use. Review and commit the generated integrity lock with the same care as `composer.lock`; subsequent installs enforce the recorded evidence.
 
 ```json
 {
@@ -106,21 +114,21 @@ Opt out (not recommended) with `extra.soak-time-integrity: false`, or relocate t
 }
 ```
 
-## 🚨 Emergency Bypass (Security Patches)
+## 🚨 Emergency Freshness Skip (Security Patches)
 
-To install a critical security patch released hours ago, bypass the filter with `SOAK_TIME_SKIP`:
+To install a critical security patch released hours ago, skip the freshness filter for that package with `SOAK_TIME_SKIP`:
 
 **Linux / macOS:**
 ```bash
-SOAK_TIME_SKIP=1 composer update vendor/package-name
+SOAK_TIME_SKIP=vendor/package-name composer update vendor/package-name
 ```
 
 **Windows (PowerShell):**
 ```powershell
-$env:SOAK_TIME_SKIP=1; composer update vendor/package-name
+$env:SOAK_TIME_SKIP="vendor/package-name"; composer update vendor/package-name
 ```
 
-> **Note:** `SOAK_TIME_SKIP` disables **all protections** (soak, drift check, hash pinning) for **every package in the run**, not just the ones named on the command line. Use deliberately and sparingly.
+`SOAK_TIME_SKIP=1` still skips the freshness filter for the whole run, but integrity checks remain enabled. Use the package-name form for emergency patches so the rest of the pool still soaks normally.
 
 ## 🔍 Debugging
 
@@ -145,10 +153,10 @@ If the soak time hides **every** available version of a required package, Compos
             If Composer now fails to resolve dependencies, this is the likely cause. Options:
               - Lower the soak time:  SOAK_TIME_HOURS=6 composer update
               - Whitelist it:         add "vendor/package" to extra.soak-time-whitelist
-              - Emergency bypass:     SOAK_TIME_SKIP=1 composer update
+              - One-run skip:         SOAK_TIME_SKIP=vendor/package composer update
 ```
 
-Whitelist the package if it legitimately needs frequent updates; use the emergency bypass for a one-off install.
+Whitelist the package if it legitimately needs frequent updates; use a one-run skip for an emergency patch.
 
 ## 🙏 Credits
 
