@@ -3,6 +3,7 @@
 namespace Innobrain\SoakTime;
 
 use Composer\Package\PackageInterface;
+use Composer\Repository\PlatformRepository;
 
 /**
  * Defends against the new-release attack: a fresh malicious tag (typosquat,
@@ -14,8 +15,8 @@ use Composer\Package\PackageInterface;
 final class PackageFilter
 {
     /**
-     * Drop every package version published after the given threshold,
-     * keeping whitelisted packages and versions with no known release date.
+     * Drop every package version published after the given threshold. Versions
+     * with no known release date are also dropped unless explicitly whitelisted.
      *
      * @param  iterable<PackageInterface>  $packages
      * @param  list<string>  $whitelist
@@ -26,6 +27,12 @@ final class PackageFilter
         $droppedByName = [];
 
         foreach ($packages as $package) {
+            if (PlatformRepository::isPlatformPackage($package->getName())) {
+                $kept[] = $package;
+
+                continue;
+            }
+
             if (in_array($package->getName(), $whitelist, true)) {
                 $kept[] = $package;
 
@@ -34,7 +41,7 @@ final class PackageFilter
 
             $releaseDate = $package->getReleaseDate();
 
-            if ($releaseDate !== null && $releaseDate > $threshold) {
+            if ($releaseDate === null || $releaseDate > $threshold) {
                 $droppedByName[$package->getName()][] = $package;
 
                 continue;

@@ -48,13 +48,40 @@ final class PackageFilterTest extends TestCase
     }
 
     #[Test]
-    public function it_keeps_packages_without_a_release_date(): void
+    public function it_drops_packages_without_a_release_date(): void
     {
         $package = $this->package('vendor/local', '1.0.0', null);
 
         $result = (new PackageFilter())->filter([$package], new \DateTimeImmutable('-168 hours'), []);
 
+        $this->assertSame([], $result->keptPackages);
+        $this->assertSame(1, $result->droppedCount());
+        $this->assertArrayHasKey('vendor/local', $result->droppedByName);
+    }
+
+    #[Test]
+    public function it_keeps_whitelisted_packages_without_a_release_date(): void
+    {
+        $package = $this->package('vendor/local', '1.0.0', null);
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            ['vendor/local']
+        );
+
         $this->assertSame([$package], $result->keptPackages);
+    }
+
+    #[Test]
+    public function it_keeps_platform_packages_without_a_release_date(): void
+    {
+        $package = $this->package('php', '8.4.0', null);
+
+        $result = (new PackageFilter())->filter([$package], new \DateTimeImmutable('-168 hours'), []);
+
+        $this->assertSame([$package], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
     }
 
     #[Test]
