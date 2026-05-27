@@ -100,7 +100,7 @@ final class HashVerifierTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No recorded dist sha256 for vendor/pkg@1.0.0');
-        $this->expectExceptionMessage('composer update vendor/pkg --prefer-source');
+        $this->expectExceptionMessage('composer reinstall vendor/pkg --prefer-source');
 
         $verifier->verify($this->event($this->package('vendor/pkg', '1.0.0', 'ref-abc')));
     }

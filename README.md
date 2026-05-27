@@ -105,10 +105,10 @@ Opt out (not recommended) with `extra.soak-time-integrity: false`, or relocate t
 
 The first time a version is seen is trust-on-first-use. Review and commit the generated integrity lock with the same care as `composer.lock`; subsequent installs enforce the recorded evidence.
 
-Some Composer paths, including plugin self-updates, can install from dist without delivering the archive to the active plugin instance. In that case the plugin fails closed. Re-run the command with `--prefer-source`, for example:
+Some Composer paths, including plugin self-updates, can install from dist without delivering the archive to the active plugin instance. In that case the plugin fails closed. Reinstall the package from source, for example:
 
 ```bash
-composer global update innobrain/soak-time --prefer-source
+composer global reinstall innobrain/soak-time --prefer-source
 ```
 
 ```json

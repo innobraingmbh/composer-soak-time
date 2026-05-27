@@ -65,7 +65,7 @@ final class PackageIntegrityRecorderTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No dist hash was pinned for vendor/pkg@1.0.0');
-        $this->expectExceptionMessage('composer update vendor/pkg --prefer-source');
+        $this->expectExceptionMessage('composer reinstall vendor/pkg --prefer-source');
 
         $recorder->record($this->package('dist', 'source-ref'));
     }
@@ -87,7 +87,7 @@ final class PackageIntegrityRecorderTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No dist hash was pinned for vendor/pkg@1.0.0');
-        $this->expectExceptionMessage('composer global update vendor/pkg --prefer-source');
+        $this->expectExceptionMessage('composer global reinstall vendor/pkg --prefer-source');
 
         $recorder->record($this->package('dist', 'source-ref'));
     }

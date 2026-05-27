@@ -69,10 +69,10 @@ final class PackageIntegrityRecorder
             "[Soak Time] No dist hash was pinned for %s@%s.\n".
             "  Composer installed this package from dist, but the active plugin did not observe the archive download.\n".
             "  Refusing to leave the installed version pinned only by metadata.\n".
-            "  Re-run with source installs so Composer verifies the source reference instead:\n".
-            "    composer update %s --prefer-source\n".
-            "  For global plugin updates, use:\n".
-            "    composer global update %s --prefer-source",
+            "  Reinstall from source so Composer verifies the source reference instead:\n".
+            "    composer reinstall %s --prefer-source\n".
+            "  For global plugin installs, use:\n".
+            "    composer global reinstall %s --prefer-source",
             $name,
             $version,
             $name,

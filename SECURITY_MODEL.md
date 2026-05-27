@@ -13,7 +13,7 @@ The plugin does this with two layers. First, it removes package versions newer t
 - Versions with no release date are filtered unless whitelisted, except Composer platform packages such as `php` and `ext-*`.
 - Existing lock entries are fail-closed: malformed or incomplete integrity data stops the run.
 - Source installs are pinned by source reference and source URL.
-- Dist downloads are pinned by the archive's sha256 when Composer exposes the archive to the plugin. If Composer installs from dist without exposing the archive, the run fails closed and must be retried with `--prefer-source`.
+- Dist downloads are pinned by the archive's sha256 when Composer exposes the archive to the plugin. If Composer installs from dist without exposing the archive, the run fails closed and the package must be reinstalled with `--prefer-source`.
 - `SOAK_TIME_SKIP` bypasses only freshness filtering. Integrity checks still run.
 
 ## Trust Boundary

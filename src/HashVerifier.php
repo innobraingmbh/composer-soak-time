@@ -67,10 +67,10 @@ final class HashVerifier
                     "[Soak Time] No recorded dist sha256 for %s@%s.\n".
                     "  This version was previously pinned without observing a dist archive.\n".
                     "  Refusing to trust a later first-seen archive for an already-known version.\n".
-                    "  Re-run with source installs so Composer verifies the recorded source reference:\n".
-                    "    composer update %s --prefer-source\n".
-                    "  For global plugin updates, use:\n".
-                    "    composer global update %s --prefer-source\n".
+                    "  Reinstall from source so Composer verifies the recorded source reference:\n".
+                    "    composer reinstall %s --prefer-source\n".
+                    "  For global plugin installs, use:\n".
+                    "    composer global reinstall %s --prefer-source\n".
                     "  To override after manual verification, delete the entry from %s.",
                     $name,
                     $version,
