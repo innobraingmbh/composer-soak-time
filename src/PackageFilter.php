@@ -40,7 +40,7 @@ final class PackageFilter
                 continue;
             }
 
-            if (in_array($package->getName(), $whitelist, true)) {
+            if (self::matchesWhitelist($package->getName(), $whitelist)) {
                 $kept[] = $package;
 
                 continue;
@@ -58,5 +58,43 @@ final class PackageFilter
         }
 
         return new FilterResult($kept, $droppedByName);
+    }
+
+    /**
+     * Invalid patterns are skipped silently here; callers that surface
+     * user-supplied config should validate up front and warn.
+     *
+     * @param  list<string>  $whitelist
+     */
+    public static function matchesWhitelist(string $name, array $whitelist): bool
+    {
+        foreach ($whitelist as $pattern) {
+            if (self::isValidWhitelistPattern($pattern) && fnmatch($pattern, $name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Vendor must be a literal so a single config line can never silently
+     * whitelist every dependency.
+     */
+    public static function isValidWhitelistPattern(string $pattern): bool
+    {
+        $parts = explode('/', $pattern);
+
+        if (count($parts) !== 2) {
+            return false;
+        }
+
+        [$vendor, $name] = $parts;
+
+        if ($vendor === '' || str_contains($vendor, '*')) {
+            return false;
+        }
+
+        return $name !== '';
     }
 }

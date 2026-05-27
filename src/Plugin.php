@@ -195,7 +195,18 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $whitelist = [self::SELF];
 
         if (isset($extra['soak-time-whitelist']) && is_array($extra['soak-time-whitelist'])) {
-            $whitelist = array_merge($whitelist, array_values($extra['soak-time-whitelist']));
+            foreach (array_values($extra['soak-time-whitelist']) as $entry) {
+                if (! is_string($entry) || ! PackageFilter::isValidWhitelistPattern($entry)) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid extra.soak-time-whitelist entry "%s" — patterns must be "vendor/name"; the vendor must be a literal (no "*"), wildcards are only allowed in the name half (e.g. "your-company/*").</warning>',
+                        is_string($entry) ? $entry : get_debug_type($entry)
+                    ));
+
+                    continue;
+                }
+
+                $whitelist[] = $entry;
+            }
         }
 
         $skipAllSoak = false;
@@ -216,7 +227,10 @@ class Plugin implements PluginInterface, EventSubscriberInterface
                         continue;
                     }
 
-                    if (preg_match('/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/', $packageName) !== 1) {
+                    if (
+                        preg_match('/^[a-z0-9_.-]+\/[a-z0-9_.*-]+$/', $packageName) !== 1
+                        || ! PackageFilter::isValidWhitelistPattern($packageName)
+                    ) {
                         $this->io->writeError(sprintf(
                             '<warning>[Soak Time] Ignoring invalid package name "%s" in SOAK_TIME_SKIP.</warning>',
                             $packageName

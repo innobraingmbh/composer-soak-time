@@ -112,6 +112,103 @@ final class PackageFilterTest extends TestCase
     }
 
     #[Test]
+    public function it_keeps_packages_matching_a_vendor_wildcard(): void
+    {
+        $package = $this->package('acme/foo', '1.0.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            ['acme/*']
+        );
+
+        $this->assertSame([$package], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_keeps_packages_matching_a_name_suffix_wildcard(): void
+    {
+        $package = $this->package('acme/lib-internal', '1.0.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            ['acme/lib-*']
+        );
+
+        $this->assertSame([$package], $result->keptPackages);
+    }
+
+    #[Test]
+    public function it_does_not_match_a_vendor_wildcard_against_a_different_vendor(): void
+    {
+        $package = $this->package('other/foo', '1.0.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            ['acme/*']
+        );
+
+        $this->assertSame([], $result->keptPackages);
+        $this->assertSame(1, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_treats_regex_metacharacters_in_whitelist_entries_as_literals(): void
+    {
+        $package = $this->package('vendor/a.b', '1.0.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            ['vendor/aXb']
+        );
+
+        $this->assertSame([], $result->keptPackages);
+    }
+
+    #[Test]
+    public function it_rejects_a_bare_wildcard_pattern(): void
+    {
+        $this->assertFalse(PackageFilter::isValidWhitelistPattern('*'));
+        $this->assertFalse(PackageFilter::matchesWhitelist('vendor/anything', ['*']));
+    }
+
+    #[Test]
+    public function it_rejects_a_pattern_with_a_wildcard_in_the_vendor_half(): void
+    {
+        $this->assertFalse(PackageFilter::isValidWhitelistPattern('*/internal'));
+        $this->assertFalse(PackageFilter::isValidWhitelistPattern('*/*'));
+        $this->assertFalse(PackageFilter::isValidWhitelistPattern('ac*me/foo'));
+        $this->assertFalse(PackageFilter::matchesWhitelist('vendor/anything', ['*/anything']));
+    }
+
+    #[Test]
+    public function it_accepts_patterns_with_a_literal_vendor(): void
+    {
+        $this->assertTrue(PackageFilter::isValidWhitelistPattern('acme/foo'));
+        $this->assertTrue(PackageFilter::isValidWhitelistPattern('acme/*'));
+        $this->assertTrue(PackageFilter::isValidWhitelistPattern('vendor/foo-*'));
+    }
+
+    #[Test]
+    public function it_matches_a_wildcard_entry_that_is_not_first_in_the_list(): void
+    {
+        $this->assertTrue(PackageFilter::matchesWhitelist(
+            'acme/foo',
+            ['unrelated/exact', 'other/*', 'acme/*']
+        ));
+    }
+
+    #[Test]
+    public function an_empty_whitelist_matches_nothing(): void
+    {
+        $this->assertFalse(PackageFilter::matchesWhitelist('vendor/anything', []));
+    }
+
+    #[Test]
     public function it_reports_a_package_whose_versions_were_all_dropped(): void
     {
         $result = (new PackageFilter())->filter(

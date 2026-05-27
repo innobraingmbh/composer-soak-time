@@ -81,11 +81,16 @@ Some packages need to update constantly — security advisories, internal compan
         "soak-time-hours": 168,
         "soak-time-whitelist": [
             "roave/security-advisories",
-            "your-company/internal-package"
+            "your-company/internal-package",
+            "your-company/*"
         ]
     }
 }
 ```
+
+Entries support `*` wildcards in the **name** half only — the vendor half must always be a literal you've explicitly typed. `your-company/*` covers every package under the `your-company` vendor namespace; `your-company/lib-*` matches a name prefix within that vendor. `SOAK_TIME_SKIP` accepts the same wildcards (e.g. `SOAK_TIME_SKIP=your-company/* composer update`).
+
+Patterns with a wildcard in the vendor half (`*/something`, `*/*`, bare `*`) are rejected and the plugin warns. A whitelist entry should always name a vendor the user trusts; allowing `*` on the left would let a single config line silently bypass the soak filter for every dependency. Use `SOAK_TIME_SKIP=1` for an intentional one-run global bypass instead.
 
 Package versions with no release date are filtered out unless whitelisted. Add path repositories or internal repositories to the whitelist only when you intentionally trust their release metadata outside Packagist.
 
