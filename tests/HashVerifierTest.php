@@ -46,6 +46,7 @@ final class HashVerifierTest extends TestCase
         $this->assertNotNull($entry);
         $this->assertSame(hash_file('sha256', $this->tarballPath), $entry->sha256);
         $this->assertSame('ref-abc', $entry->sourceReference);
+        $this->assertSame('https://example.com/vendor/pkg.git', $entry->sourceUrl);
 
         // Verification itself does not write to disk — the Plugin saves the
         // lock once at POST_INSTALL_CMD / POST_UPDATE_CMD.
@@ -58,7 +59,7 @@ final class HashVerifierTest extends TestCase
         $sha = hash_file('sha256', $this->tarballPath);
         $lock = IntegrityLockFile::load($this->lockPath);
         $lock->record(new IntegrityEntry(
-            'vendor/pkg', '1.0.0', $sha, 'ref-abc', null, new \DateTimeImmutable()
+            'vendor/pkg', '1.0.0', $sha, 'ref-abc', null, null, new \DateTimeImmutable()
         ));
         $verifier = new HashVerifier($lock, new NullIO());
 
@@ -72,12 +73,33 @@ final class HashVerifierTest extends TestCase
     {
         $lock = IntegrityLockFile::load($this->lockPath);
         $lock->record(new IntegrityEntry(
-            'vendor/pkg', '1.0.0', str_repeat('0', 64), 'ref-abc', null, new \DateTimeImmutable()
+            'vendor/pkg', '1.0.0', str_repeat('0', 64), 'ref-abc', null, null, new \DateTimeImmutable()
         ));
         $verifier = new HashVerifier($lock, new NullIO());
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Integrity check FAILED for vendor/pkg@1.0.0');
+
+        $verifier->verify($this->event($this->package('vendor/pkg', '1.0.0', 'ref-abc')));
+    }
+
+    #[Test]
+    public function it_throws_when_a_known_version_has_no_recorded_dist_hash(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg',
+            '1.0.0',
+            null,
+            'ref-abc',
+            'https://example.com/vendor/pkg.git',
+            'https://example.com/vendor/pkg/1.0.0.zip',
+            new \DateTimeImmutable()
+        ));
+        $verifier = new HashVerifier($lock, new NullIO());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('No recorded dist sha256 for vendor/pkg@1.0.0');
 
         $verifier->verify($this->event($this->package('vendor/pkg', '1.0.0', 'ref-abc')));
     }
@@ -106,6 +128,7 @@ final class HashVerifierTest extends TestCase
     {
         $package = new Package($name, $version.'.0', $version);
         $package->setSourceReference($sourceReference);
+        $package->setSourceUrl('https://example.com/'.$name.'.git');
         $package->setDistUrl('https://example.com/'.$name.'/'.$version.'.zip');
 
         return $package;

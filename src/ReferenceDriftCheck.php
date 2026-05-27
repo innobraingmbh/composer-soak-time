@@ -17,9 +17,9 @@ final class ReferenceDriftCheck
     public function __construct(private readonly IntegrityLockFile $lockFile) {}
 
     /**
-     * Hard-fail if any candidate package@version has a recorded source.reference
-     * that no longer matches what the pool offers. Cheap-and-early signal that
-     * a tag was force-pushed.
+     * Hard-fail if any candidate package@version no longer matches recorded
+     * integrity metadata. This is the cheap-and-early signal that a tag,
+     * source repository, or dist URL moved before Composer downloads code.
      *
      * @param  iterable<PackageInterface>  $packages
      */
@@ -28,30 +28,45 @@ final class ReferenceDriftCheck
         foreach ($packages as $package) {
             $entry = $this->lockFile->lookup($package->getName(), $package->getPrettyVersion());
 
-            if ($entry === null || $entry->sourceReference === null) {
+            if ($entry === null) {
                 continue;
             }
 
-            $candidate = $package->getSourceReference();
-
-            if ($candidate === null || $candidate === '' || $candidate === $entry->sourceReference) {
-                continue;
-            }
-
-            throw new \RuntimeException(sprintf(
-                "[Soak Time] Source reference drift for %s@%s.\n".
-                "  Recorded reference:  %s\n".
-                "  Candidate reference: %s\n".
-                "  The git commit for this exact version has moved since it was first installed.\n".
-                "  This is the signature of a force-pushed tag (altered historical release).\n".
-                "  Investigate before proceeding. To override after manual verification,\n".
-                "  delete the entry from %s.",
-                $package->getName(),
-                $package->getPrettyVersion(),
-                $entry->sourceReference,
-                $candidate,
-                $this->lockFile->path
-            ));
+            $this->assertMatches($package, 'source reference', $entry->sourceReference, $package->getSourceReference());
+            $this->assertMatches($package, 'source URL', $entry->sourceUrl, $package->getSourceUrl());
+            $this->assertMatches($package, 'dist URL', $entry->distUrl, $package->getDistUrl());
         }
+    }
+
+    private function assertMatches(
+        PackageInterface $package,
+        string $field,
+        ?string $recorded,
+        ?string $candidate,
+    ): void {
+        if ($recorded === null) {
+            return;
+        }
+
+        if ($candidate === $recorded) {
+            return;
+        }
+
+        throw new \RuntimeException(sprintf(
+            "[Soak Time] Integrity metadata drift for %s@%s.\n".
+            "  Field:     %s\n".
+            "  Recorded:  %s\n".
+            "  Candidate: %s\n".
+            "  The metadata for this exact version has changed since it was first installed.\n".
+            "  This is the signature of an altered historical release or repository rewrite.\n".
+            "  Investigate before proceeding. To override after manual verification,\n".
+            "  delete the entry from %s.",
+            $package->getName(),
+            $package->getPrettyVersion(),
+            $field,
+            $recorded,
+            $candidate ?? '<missing>',
+            $this->lockFile->path
+        ));
     }
 }

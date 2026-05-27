@@ -36,7 +36,11 @@ final class HashVerifier
         $fileName = $event->getFileName();
 
         if ($fileName === null || ! is_file($fileName)) {
-            return;
+            throw new \RuntimeException(sprintf(
+                '[Soak Time] Cannot verify package download for %s@%s because Composer did not provide a readable file.',
+                $package->getName(),
+                $package->getPrettyVersion()
+            ));
         }
 
         // PostFileDownloadEvent::getChecksum() returns the DECLARED sha1 from
@@ -45,7 +49,10 @@ final class HashVerifier
         $computed = hash_file('sha256', $fileName);
 
         if ($computed === false) {
-            return;
+            throw new \RuntimeException(sprintf(
+                '[Soak Time] Cannot compute sha256 for downloaded package file: %s',
+                $fileName
+            ));
         }
 
         $name = $package->getName();
@@ -53,6 +60,20 @@ final class HashVerifier
         $entry = $this->lockFile->lookup($name, $version);
 
         if ($entry !== null) {
+            (new ReferenceDriftCheck($this->lockFile))->verify([$package]);
+
+            if ($entry->sha256 === null) {
+                throw new \RuntimeException(sprintf(
+                    "[Soak Time] No recorded dist sha256 for %s@%s.\n".
+                    "  This version was previously pinned without a dist archive.\n".
+                    "  Refusing to trust a first-seen archive for an already-known version.\n".
+                    "  To override after manual verification, delete the entry from %s.",
+                    $name,
+                    $version,
+                    $this->lockFile->path
+                ));
+            }
+
             if (hash_equals($entry->sha256, $computed)) {
                 return;
             }
@@ -77,6 +98,7 @@ final class HashVerifier
             $version,
             $computed,
             $package->getSourceReference(),
+            $package->getSourceUrl(),
             $package->getDistUrl(),
             new \DateTimeImmutable(),
         );

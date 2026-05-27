@@ -57,6 +57,7 @@ final class IntegrityLockFileTest extends TestCase
         $this->assertNotNull($found);
         $this->assertSame(str_repeat('b', 64), $found->sha256);
         $this->assertSame('abc123ref', $found->sourceReference);
+        $this->assertSame('https://example.com/vendor/pkg.git', $found->sourceUrl);
     }
 
     #[Test]
@@ -82,24 +83,48 @@ final class IntegrityLockFileTest extends TestCase
     }
 
     #[Test]
-    public function it_ignores_malformed_entries_when_loading(): void
+    public function it_throws_when_an_entry_is_malformed(): void
     {
         file_put_contents($this->path, json_encode([
-            '_version' => 1,
+            '_version' => 2,
             'packages' => [
                 'vendor/pkg' => [
                     '1.0.0' => ['sha256' => '', 'firstSeenAt' => '2026-01-01T00:00:00+00:00'],
-                    '1.0.1' => ['sha256' => 'valid', 'firstSeenAt' => 'not-a-date'],
-                    '1.0.2' => ['sha256' => 'valid', 'firstSeenAt' => '2026-01-02T00:00:00+00:00'],
+                ],
+            ],
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Integrity lock file has an invalid entry for vendor/pkg@1.0.0');
+
+        IntegrityLockFile::load($this->path);
+    }
+
+    #[Test]
+    public function it_loads_a_source_only_entry_when_a_source_reference_is_recorded(): void
+    {
+        file_put_contents($this->path, json_encode([
+            '_version' => 2,
+            'packages' => [
+                'vendor/pkg' => [
+                    '1.0.0' => [
+                        'sha256' => null,
+                        'sourceReference' => 'source-ref',
+                        'sourceUrl' => 'https://example.com/vendor/pkg.git',
+                        'distUrl' => null,
+                        'firstSeenAt' => '2026-01-01T00:00:00+00:00',
+                    ],
                 ],
             ],
         ]));
 
         $lock = IntegrityLockFile::load($this->path);
+        $entry = $lock->lookup('vendor/pkg', '1.0.0');
 
-        $this->assertNull($lock->lookup('vendor/pkg', '1.0.0'));
-        $this->assertNull($lock->lookup('vendor/pkg', '1.0.1'));
-        $this->assertNotNull($lock->lookup('vendor/pkg', '1.0.2'));
+        $this->assertNotNull($entry);
+        $this->assertNull($entry->sha256);
+        $this->assertSame('source-ref', $entry->sourceReference);
+        $this->assertSame('https://example.com/vendor/pkg.git', $entry->sourceUrl);
     }
 
     private function entry(string $name, string $version, string $sha256, ?string $ref = null): IntegrityEntry
@@ -109,6 +134,7 @@ final class IntegrityLockFileTest extends TestCase
             $version,
             $sha256,
             $ref,
+            'https://example.com/'.$name.'.git',
             'https://example.com/'.$name.'/'.$version.'.zip',
             new \DateTimeImmutable('2026-05-26T12:00:00+00:00'),
         );
