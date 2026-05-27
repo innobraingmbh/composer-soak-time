@@ -39,6 +39,10 @@ final class PackageIntegrityRecorderTest extends TestCase
         $this->assertNull($entry->sha256);
         $this->assertSame('source-ref', $entry->sourceReference);
         $this->assertSame('https://example.com/vendor/pkg.git', $entry->sourceUrl);
+
+        $persisted = IntegrityLockFile::load($this->lockPath)->lookup('vendor/pkg', '1.0.0');
+        $this->assertNotNull($persisted);
+        $this->assertSame('source-ref', $persisted->sourceReference);
     }
 
     #[Test]
@@ -61,6 +65,7 @@ final class PackageIntegrityRecorderTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No dist hash was pinned for vendor/pkg@1.0.0');
+        $this->expectExceptionMessage('composer update vendor/pkg --prefer-source');
 
         $recorder->record($this->package('dist', 'source-ref'));
     }
@@ -81,7 +86,8 @@ final class PackageIntegrityRecorderTest extends TestCase
         $recorder = new PackageIntegrityRecorder($lock, new NullIO());
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('No recorded dist sha256 for vendor/pkg@1.0.0');
+        $this->expectExceptionMessage('No dist hash was pinned for vendor/pkg@1.0.0');
+        $this->expectExceptionMessage('composer global update vendor/pkg --prefer-source');
 
         $recorder->record($this->package('dist', 'source-ref'));
     }

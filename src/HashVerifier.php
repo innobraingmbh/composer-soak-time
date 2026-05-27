@@ -65,11 +65,17 @@ final class HashVerifier
             if ($entry->sha256 === null) {
                 throw new \RuntimeException(sprintf(
                     "[Soak Time] No recorded dist sha256 for %s@%s.\n".
-                    "  This version was previously pinned without a dist archive.\n".
-                    "  Refusing to trust a first-seen archive for an already-known version.\n".
+                    "  This version was previously pinned without observing a dist archive.\n".
+                    "  Refusing to trust a later first-seen archive for an already-known version.\n".
+                    "  Re-run with source installs so Composer verifies the recorded source reference:\n".
+                    "    composer update %s --prefer-source\n".
+                    "  For global plugin updates, use:\n".
+                    "    composer global update %s --prefer-source\n".
                     "  To override after manual verification, delete the entry from %s.",
                     $name,
                     $version,
+                    $name,
+                    $name,
                     $this->lockFile->path
                 ));
             }
@@ -104,6 +110,7 @@ final class HashVerifier
         );
 
         $this->lockFile->record($newEntry);
+        $this->lockFile->save();
 
         $this->io->write(sprintf(
             '<info>[Soak Time] Pinned %s@%s (sha256 %s…)</info>',

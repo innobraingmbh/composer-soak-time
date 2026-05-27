@@ -22,28 +22,10 @@ final class PackageIntegrityRecorder
             (new ReferenceDriftCheck($this->lockFile))->verify([$package]);
 
             if ($package->getInstallationSource() === 'dist' && $entry->sha256 === null) {
-                throw new \RuntimeException(sprintf(
-                    "[Soak Time] No recorded dist sha256 for %s@%s.\n".
-                    "  This version was previously pinned without a dist archive.\n".
-                    "  Refusing to trust a first-seen archive for an already-known version.\n".
-                    "  To override after manual verification, delete the entry from %s.",
-                    $name,
-                    $version,
-                    $this->lockFile->path
-                ));
+                throw $this->unobservedDistArchive($name, $version);
             }
 
             return;
-        }
-
-        if ($package->getInstallationSource() === 'dist') {
-            throw new \RuntimeException(sprintf(
-                "[Soak Time] No dist hash was pinned for %s@%s.\n".
-                "  Composer installed this package from dist, but post-file-download did not record it.\n".
-                "  Refusing to leave the installed version unpinned.",
-                $name,
-                $version
-            ));
         }
 
         $sourceReference = $package->getSourceReference();
@@ -58,6 +40,10 @@ final class PackageIntegrityRecorder
             ));
         }
 
+        if ($package->getInstallationSource() === 'dist') {
+            throw $this->unobservedDistArchive($name, $version);
+        }
+
         $this->lockFile->record(new IntegrityEntry(
             $name,
             $version,
@@ -67,6 +53,7 @@ final class PackageIntegrityRecorder
             $package->getDistUrl(),
             new \DateTimeImmutable(),
         ));
+        $this->lockFile->save();
 
         $this->io->write(sprintf(
             '<info>[Soak Time] Pinned %s@%s (source ref %s…)</info>',
@@ -74,5 +61,22 @@ final class PackageIntegrityRecorder
             $version,
             substr($sourceReference, 0, 12)
         ), true, IOInterface::VERBOSE);
+    }
+
+    private function unobservedDistArchive(string $name, string $version): \RuntimeException
+    {
+        return new \RuntimeException(sprintf(
+            "[Soak Time] No dist hash was pinned for %s@%s.\n".
+            "  Composer installed this package from dist, but the active plugin did not observe the archive download.\n".
+            "  Refusing to leave the installed version pinned only by metadata.\n".
+            "  Re-run with source installs so Composer verifies the source reference instead:\n".
+            "    composer update %s --prefer-source\n".
+            "  For global plugin updates, use:\n".
+            "    composer global update %s --prefer-source",
+            $name,
+            $version,
+            $name,
+            $name
+        ));
     }
 }

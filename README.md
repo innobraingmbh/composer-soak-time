@@ -16,10 +16,10 @@ Three checks run on every install/update. Together they make soak time undefeata
 |---|---|---|---|
 | **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases | Drops recent versions from the solver pool until they reach minimum age. |
 | **Reference drift** (`ReferenceDriftCheck`) | `PRE_POOL_CREATE` | Altered historical releases (force-pushed tag) | The git SHA is content-addressed over the commit's tree, parents, author, committer, message, *and dates*. Backdating `GIT_COMMITTER_DATE` still yields a different SHA, and the SHA can't be forged. |
-| **Hash pinning** (`HashVerifier`) | `POST_FILE_DOWNLOAD` | Cache poisoning at `~/.composer/cache/files/` | Composer's native sha1 check is empty for GitHub-served packages; we compute sha256 ourselves and compare against the pinned value. |
-| **Source install pinning** (`PackageIntegrityRecorder`) | `POST_PACKAGE_INSTALL` / `POST_PACKAGE_UPDATE` | `--prefer-source` and source-only installs | If no dist archive is downloaded, the installed source reference is still pinned and later checked. |
+| **Hash pinning** (`HashVerifier`) | `POST_FILE_DOWNLOAD` | Cache poisoning at `~/.composer/cache/files/` | Composer's native sha1 check is empty for GitHub-served packages; when Composer exposes the downloaded archive, we compute sha256 ourselves and compare against the pinned value. |
+| **Source install pinning** (`PackageIntegrityRecorder`) | `POST_PACKAGE_INSTALL` / `POST_PACKAGE_UPDATE` | `--prefer-source` and source-only installs | If no dist archive is downloaded, the installed source reference is pinned and later checked. If Composer installs from dist without exposing the archive to the plugin, the run fails closed. |
 
-The timestamp filter alone is **not** enough — the SHA/source-reference pin is the load-bearing primitive against altered historical releases. New pins are flushed to `composer-integrity.lock` at `POST_INSTALL_CMD` / `POST_UPDATE_CMD`.
+The timestamp filter alone is **not** enough — the SHA/source-reference pin is the load-bearing primitive against altered historical releases. New pins are written to `composer-integrity.lock` as they are observed and saved again at `POST_INSTALL_CMD` / `POST_UPDATE_CMD`.
 
 ## 📦 Installation
 
@@ -93,7 +93,7 @@ Package versions with no release date are filtered out unless whitelisted. Add p
 
 The plugin maintains `composer-integrity.lock` next to `composer.json`. For every package version installed, it records:
 
-- `sha256` of the downloaded zip, when Composer installs from dist
+- `sha256` of the downloaded zip, when Composer exposes the archive to the plugin
 - `sourceReference` (git commit SHA)
 - `sourceUrl`
 - `distUrl`
@@ -104,6 +104,12 @@ The plugin maintains `composer-integrity.lock` next to `composer.json`. For ever
 Opt out (not recommended) with `extra.soak-time-integrity: false`, or relocate the file via `extra.soak-time-integrity-lock`.
 
 The first time a version is seen is trust-on-first-use. Review and commit the generated integrity lock with the same care as `composer.lock`; subsequent installs enforce the recorded evidence.
+
+Some Composer paths, including plugin self-updates, can install from dist without delivering the archive to the active plugin instance. In that case the plugin fails closed. Re-run the command with `--prefer-source`, for example:
+
+```bash
+composer global update innobrain/soak-time --prefer-source
+```
 
 ```json
 {

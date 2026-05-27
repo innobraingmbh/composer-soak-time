@@ -48,9 +48,9 @@ final class HashVerifierTest extends TestCase
         $this->assertSame('ref-abc', $entry->sourceReference);
         $this->assertSame('https://example.com/vendor/pkg.git', $entry->sourceUrl);
 
-        // Verification itself does not write to disk — the Plugin saves the
-        // lock once at POST_INSTALL_CMD / POST_UPDATE_CMD.
-        $this->assertFileDoesNotExist($this->lockPath);
+        $persisted = IntegrityLockFile::load($this->lockPath)->lookup('vendor/pkg', '1.0.0');
+        $this->assertNotNull($persisted);
+        $this->assertSame($entry->sha256, $persisted->sha256);
     }
 
     #[Test]
@@ -100,6 +100,7 @@ final class HashVerifierTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No recorded dist sha256 for vendor/pkg@1.0.0');
+        $this->expectExceptionMessage('composer update vendor/pkg --prefer-source');
 
         $verifier->verify($this->event($this->package('vendor/pkg', '1.0.0', 'ref-abc')));
     }
