@@ -6,12 +6,12 @@ final class SoakTimeConfig
 {
     /**
      * @param  list<string>  $whitelist
-     * @param  bool  $bypass  Emergency switch (SOAK_TIME_SKIP=1) — disables soak filtering AND integrity checks.
+     * @param  bool  $skipAllSoak  Emergency switch (SOAK_TIME_SKIP=1) — disables soak filtering only.
      */
     public function __construct(
         public readonly int $minHours,
         public readonly array $whitelist,
-        public readonly bool $bypass,
+        public readonly bool $skipAllSoak,
         public readonly bool $integrity = true,
         public readonly string $integrityLockPath = 'composer-integrity.lock',
     ) {}

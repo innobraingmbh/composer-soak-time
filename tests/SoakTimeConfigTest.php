@@ -63,6 +63,6 @@ final class SoakTimeConfigTest extends TestCase
 
         $this->assertSame(72, $config->minHours);
         $this->assertSame(['innobrain/soak-time', 'vendor/internal'], $config->whitelist);
-        $this->assertTrue($config->bypass);
+        $this->assertTrue($config->skipAllSoak);
     }
 }

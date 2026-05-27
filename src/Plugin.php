@@ -3,9 +3,14 @@
 namespace Innobrain\SoakTime;
 
 use Composer\Composer;
+use Composer\DependencyResolver\Operation\InstallOperation;
+use Composer\DependencyResolver\Operation\OperationInterface;
+use Composer\DependencyResolver\Operation\UpdateOperation;
 use Composer\EventDispatcher\EventSubscriberInterface;
 use Composer\Factory;
 use Composer\IO\IOInterface;
+use Composer\Installer\PackageEvent;
+use Composer\Installer\PackageEvents;
 use Composer\Package\PackageInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
@@ -43,6 +48,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         return [
             PluginEvents::PRE_POOL_CREATE => 'onPrePoolCreate',
             PluginEvents::POST_FILE_DOWNLOAD => 'onPostFileDownload',
+            PackageEvents::POST_PACKAGE_INSTALL => 'onPostPackageInstallOrUpdate',
+            PackageEvents::POST_PACKAGE_UPDATE => 'onPostPackageInstallOrUpdate',
             ScriptEvents::POST_INSTALL_CMD => 'onPostCommand',
             ScriptEvents::POST_UPDATE_CMD => 'onPostCommand',
         ];
@@ -50,17 +57,17 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     public function onPrePoolCreate(PrePoolCreateEvent $event): void
     {
-        if ($this->config->bypass) {
+        if ($this->config->integrity) {
+            (new ReferenceDriftCheck($this->lockFile))->verify($event->getPackages());
+        }
+
+        if ($this->config->skipAllSoak) {
             $this->io->writeError(
-                '<warning>[Soak Time] Emergency bypass active (SOAK_TIME_SKIP=1) — all protections '
-                .'disabled for this run.</warning>'
+                '<warning>[Soak Time] Soak filter bypass active (SOAK_TIME_SKIP=1) — integrity checks '
+                .'remain enabled.</warning>'
             );
 
             return;
-        }
-
-        if ($this->config->integrity) {
-            (new ReferenceDriftCheck($this->lockFile))->verify($event->getPackages());
         }
 
         $this->io->write(sprintf(
@@ -83,16 +90,31 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     public function onPostFileDownload(PostFileDownloadEvent $event): void
     {
-        if ($this->config->bypass || ! $this->config->integrity) {
+        if (! $this->config->integrity) {
             return;
         }
 
         (new HashVerifier($this->lockFile, $this->io))->verify($event);
     }
 
+    public function onPostPackageInstallOrUpdate(PackageEvent $event): void
+    {
+        if (! $this->config->integrity) {
+            return;
+        }
+
+        $package = $this->packageFromOperation($event->getOperation());
+
+        if ($package === null) {
+            return;
+        }
+
+        (new PackageIntegrityRecorder($this->lockFile, $this->io))->record($package);
+    }
+
     public function onPostCommand(): void
     {
-        if ($this->config->bypass || ! $this->config->integrity) {
+        if (! $this->config->integrity) {
             return;
         }
 
@@ -108,6 +130,19 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         return dirname(Factory::getComposerFile()).DIRECTORY_SEPARATOR.$configured;
+    }
+
+    private function packageFromOperation(OperationInterface $operation): ?PackageInterface
+    {
+        if ($operation instanceof InstallOperation) {
+            return $operation->getPackage();
+        }
+
+        if ($operation instanceof UpdateOperation) {
+            return $operation->getTargetPackage();
+        }
+
+        return null;
     }
 
     /**
@@ -163,6 +198,46 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $whitelist = array_merge($whitelist, array_values($extra['soak-time-whitelist']));
         }
 
+        $skipAllSoak = false;
+        $skip = getenv('SOAK_TIME_SKIP');
+
+        if ($skip !== false && trim($skip) !== '' && ! in_array(strtolower(trim($skip)), ['0', 'false', 'no'], true)) {
+            $trimmedSkip = trim($skip);
+
+            if (in_array(strtolower($trimmedSkip), ['1', 'true', '*', 'all'], true)) {
+                $skipAllSoak = true;
+            } else {
+                $skipPackages = [];
+
+                foreach (explode(',', $trimmedSkip) as $packageName) {
+                    $packageName = strtolower(trim($packageName));
+
+                    if ($packageName === '') {
+                        continue;
+                    }
+
+                    if (preg_match('/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/', $packageName) !== 1) {
+                        $this->io->writeError(sprintf(
+                            '<warning>[Soak Time] Ignoring invalid package name "%s" in SOAK_TIME_SKIP.</warning>',
+                            $packageName
+                        ));
+
+                        continue;
+                    }
+
+                    $skipPackages[] = $packageName;
+                }
+
+                if ($skipPackages !== []) {
+                    $whitelist = array_merge($whitelist, $skipPackages);
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Soak filter skipped for package(s): %s. Integrity checks remain enabled.</warning>',
+                        implode(', ', $skipPackages)
+                    ));
+                }
+            }
+        }
+
         $integrity = true;
 
         if (array_key_exists('soak-time-integrity', $extra)) {
@@ -196,7 +271,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         return new SoakTimeConfig(
             $minHours,
             $whitelist,
-            getenv('SOAK_TIME_SKIP') === '1',
+            $skipAllSoak,
             $integrity,
             $integrityLockPath,
         );
@@ -238,13 +313,15 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $packages
         );
 
+        $newest = $this->newestReleaseDate($packages);
+
         return sprintf(
-            '  %s — dropped %d version(s) newer than %dh: %s (newest released %s)',
+            '  %s — dropped %d version(s) that are newer than %dh or have no release date: %s (newest released %s)',
             $name,
             count($packages),
             $this->config->minHours,
             implode(', ', $versions),
-            $this->newestReleaseDate($packages)->format('Y-m-d H:i')
+            $newest?->format('Y-m-d H:i') ?? 'unknown'
         );
     }
 
@@ -254,27 +331,33 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     private function warnFullyDropped(string $name, array $packages): void
     {
         $newest = $this->newestReleaseDate($packages);
-        $ageHours = max(0, intdiv(time() - $newest->getTimestamp(), 3600));
+        $ageHours = $newest === null ? null : max(0, intdiv(time() - $newest->getTimestamp(), 3600));
 
         $this->io->writeError([
-            sprintf(
-                '<warning>[Soak Time] Every version of "%s" was filtered out '
-                .'(newest is only %dh old; soak time is %dh).</warning>',
-                $name,
-                $ageHours,
-                $this->config->minHours
-            ),
+            $ageHours === null
+                ? sprintf(
+                    '<warning>[Soak Time] Every version of "%s" was filtered out '
+                    .'because no release date was available.</warning>',
+                    $name
+                )
+                : sprintf(
+                    '<warning>[Soak Time] Every version of "%s" was filtered out '
+                    .'(newest is only %dh old; soak time is %dh).</warning>',
+                    $name,
+                    $ageHours,
+                    $this->config->minHours
+                ),
             '<warning>            If Composer now fails to resolve dependencies, this is the likely cause. Options:</warning>',
-            sprintf('<warning>              - Lower the soak time:  SOAK_TIME_HOURS=%d composer update</warning>', $ageHours),
+            sprintf('<warning>              - Lower the soak time:  SOAK_TIME_HOURS=%d composer update</warning>', $ageHours ?? 0),
             sprintf('<warning>              - Whitelist it:         add "%s" to extra.soak-time-whitelist</warning>', $name),
-            '<warning>              - Emergency bypass:     SOAK_TIME_SKIP=1 composer update</warning>',
+            sprintf('<warning>              - One-run skip:        SOAK_TIME_SKIP=%s composer update</warning>', $name),
         ]);
     }
 
     /**
      * @param  list<PackageInterface>  $packages
      */
-    private function newestReleaseDate(array $packages): \DateTimeInterface
+    private function newestReleaseDate(array $packages): ?\DateTimeInterface
     {
         $newest = null;
 
@@ -286,6 +369,6 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             }
         }
 
-        return $newest ?? new \DateTimeImmutable();
+        return $newest;
     }
 }
