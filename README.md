@@ -1,3 +1,6 @@
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/innobrain/soak-time.svg?style=flat-square)](https://packagist.org/packages/innobrain/soak-time)
+[![Total Downloads](https://img.shields.io/packagist/dt/innobrain/soak-time.svg?style=flat-square)](https://packagist.org/packages/innobrain/soak-time)
+
 # Innobrain Soak Time 🛡️
 
 A Composer plugin that enforces a **soak time** — a minimum age — on every package version before install. New releases stay out of the solver pool until they age past the threshold, blocking zero-day malicious releases: typosquats, account takeovers, malicious co-maintainer pushes.
