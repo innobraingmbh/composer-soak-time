@@ -24,6 +24,21 @@ Three checks run on every install/update. Together they make soak time undefeata
 
 The timestamp filter alone is **not** enough — the SHA/source-reference pin is the load-bearing primitive against altered historical releases. New pins are written to `composer-integrity.lock` as they are observed and saved again at `POST_INSTALL_CMD` / `POST_UPDATE_CMD`.
 
+## 🤝 Beyond Packagist version immutability
+
+As of June 2026, Packagist.org locks the source and dist reference of every **stable** version once it's published — the crawler refuses to follow a moved or rewritten upstream tag ([composer/packagist#1742](https://github.com/composer/packagist/pull/1742), [docs](https://packagist.org/about/version-immutability)). That closes the force-pushed-tag attack at the source for packagist.org stable releases — the same threat `ReferenceDriftCheck` was built for.
+
+This is good news, and it does **not** make the plugin redundant. Immutability is one server-side guard on one source for one kind of version. The plugin keeps enforcing the checks below because each covers a gap immutability leaves open:
+
+| Gap immutability leaves open | Why it's still exposed | Plugin layer that covers it |
+|---|---|---|
+| **Dev versions** (`dev-*`, `*-dev`) | The lock is stable-only by design; dev branches still track their git ref and stay mutable. | `ReferenceDriftCheck` pins dev refs the same as stable ones. |
+| **Fresh malicious releases** | A locked reference is still a brand-new release; immutability never delays anything. | `PackageFilter` keeps recent versions out of the pool until they soak. |
+| **Local cache poisoning** (`~/.composer/cache/files/`) | A purely client-side tamper the server can't see. | `HashVerifier` re-hashes the archive Composer actually downloaded. |
+| **Packagist bugs, admin overrides, or non-packagist sources** (Satis, private Packagist, path/VCS repos, mirrors) | The lock is enforced by packagist.org alone, and has admin takedown/soft-delete paths; other repositories have no such gate. | `composer-integrity.lock` is an independent client-side record that doesn't trust the upstream registry. |
+
+In short: Packagist immutability now backs up the *stable-version* half of `ReferenceDriftCheck`, so for packagist.org stable releases the integrity lock is defense-in-depth rather than the sole guard. The plugin still earns its keep on dev versions, fresh releases, the local cache, and any source the registry doesn't lock.
+
 ## 📦 Installation
 
 Install as a dev dependency:
