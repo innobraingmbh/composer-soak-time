@@ -16,9 +16,13 @@ use Composer\Plugin\PostFileDownloadEvent;
  */
 final class HashVerifier
 {
+    /**
+     * @param  list<string>  $devBranches  Package-name patterns declared as mutable dev branches.
+     */
     public function __construct(
         private readonly IntegrityLockFile $lockFile,
         private readonly IOInterface $io,
+        private readonly array $devBranches = [],
     ) {}
 
     public function verify(PostFileDownloadEvent $event): void
@@ -60,7 +64,16 @@ final class HashVerifier
         $entry = $this->lockFile->lookup($name, $version);
 
         if ($entry !== null) {
-            (new ReferenceDriftCheck($this->lockFile))->verify([$package]);
+            $isMutableDev = $package->isDev()
+                && PackageFilter::matchesWhitelist($name, $this->devBranches);
+
+            if ($isMutableDev && $this->referenceChanged($package, $entry)) {
+                $this->repin($package, $computed);
+
+                return;
+            }
+
+            (new ReferenceDriftCheck($this->lockFile, $this->devBranches))->verify([$package]);
 
             if ($entry->sha256 === null) {
                 throw new \RuntimeException(sprintf(
@@ -117,6 +130,49 @@ final class HashVerifier
             $name,
             $version,
             substr($computed, 0, 12)
+        ), true, IOInterface::VERBOSE);
+    }
+
+    private function referenceChanged(PackageInterface $package, IntegrityEntry $entry): bool
+    {
+        if ($entry->sourceReference !== null && $entry->sourceReference !== $package->getSourceReference()) {
+            return true;
+        }
+
+        if ($entry->sourceUrl !== null && $entry->sourceUrl !== $package->getSourceUrl()) {
+            return true;
+        }
+
+        if ($entry->distUrl !== null && $entry->distUrl !== $package->getDistUrl()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function repin(PackageInterface $package, string $sha256): void
+    {
+        $name = $package->getName();
+        $version = $package->getPrettyVersion();
+
+        $newEntry = new IntegrityEntry(
+            $name,
+            $version,
+            $sha256,
+            $package->getSourceReference(),
+            $package->getSourceUrl(),
+            $package->getDistUrl(),
+            new \DateTimeImmutable(),
+        );
+
+        $this->lockFile->record($newEntry);
+        $this->lockFile->save();
+
+        $this->io->write(sprintf(
+            '<info>[Soak Time] Re-pinned mutable dev branch %s@%s (sha256 %s…)</info>',
+            $name,
+            $version,
+            substr($sha256, 0, 12)
         ), true, IOInterface::VERBOSE);
     }
 }

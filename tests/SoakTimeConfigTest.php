@@ -65,4 +65,20 @@ final class SoakTimeConfigTest extends TestCase
         $this->assertSame(['innobrain/soak-time', 'vendor/internal'], $config->whitelist);
         $this->assertTrue($config->skipAllSoak);
     }
+
+    #[Test]
+    public function it_defaults_dev_branches_to_an_empty_array(): void
+    {
+        $config = new SoakTimeConfig(168, [], false);
+
+        $this->assertSame([], $config->devBranches);
+    }
+
+    #[Test]
+    public function it_exposes_dev_branches_when_provided(): void
+    {
+        $config = new SoakTimeConfig(168, [], false, true, 'composer-integrity.lock', ['vendor/pkg', 'vendor/*']);
+
+        $this->assertSame(['vendor/pkg', 'vendor/*'], $config->devBranches);
+    }
 }

@@ -14,7 +14,13 @@ use Composer\Package\PackageInterface;
  */
 final class ReferenceDriftCheck
 {
-    public function __construct(private readonly IntegrityLockFile $lockFile) {}
+    /**
+     * @param  list<string>  $devBranches  Package-name patterns declared as mutable dev branches.
+     */
+    public function __construct(
+        private readonly IntegrityLockFile $lockFile,
+        private readonly array $devBranches = [],
+    ) {}
 
     /**
      * Hard-fail if any candidate package@version no longer matches recorded
@@ -38,6 +44,11 @@ final class ReferenceDriftCheck
                 continue;
             }
 
+            // Declared mutable dev branches may legitimately advance their reference.
+            if ($package->isDev() && PackageFilter::matchesWhitelist($package->getName(), $this->devBranches)) {
+                continue;
+            }
+
             $this->assertMatches($package, 'source reference', $entry->sourceReference, $package->getSourceReference());
             $this->assertMatches($package, 'source URL', $entry->sourceUrl, $package->getSourceUrl());
             $this->assertMatches($package, 'dist URL', $entry->distUrl, $package->getDistUrl());
@@ -58,21 +69,29 @@ final class ReferenceDriftCheck
             return;
         }
 
+        $isDev = $package->isDev();
+
         throw new \RuntimeException(sprintf(
             "[Soak Time] Integrity metadata drift for %s@%s.\n".
             "  Field:     %s\n".
             "  Recorded:  %s\n".
             "  Candidate: %s\n".
-            "  The metadata for this exact version has changed since it was first installed.\n".
-            "  This is the signature of an altered historical release or repository rewrite.\n".
-            "  Investigate before proceeding. To override after manual verification,\n".
-            "  delete the entry from %s.",
+            ($isDev
+                ? "  This is a dev (mutable) version whose reference has changed since it was first installed.\n".
+                  "  If this change is expected (e.g. the branch advanced), declare the package as a\n".
+                  "  mutable dev branch in composer.json:\n".
+                  "    \"extra\": { \"soak-time-dev-branches\": [\"%s\"] }\n".
+                  "  To override after manual verification, delete the entry from %s."
+                : "  The metadata for this exact version has changed since it was first installed.\n".
+                  "  This is the signature of an altered historical release or repository rewrite.\n".
+                  "  Investigate before proceeding. To override after manual verification,\n".
+                  "  delete the entry from %s."),
             $package->getName(),
             $package->getPrettyVersion(),
             $field,
             $recorded,
             $candidate ?? '<missing>',
-            $this->lockFile->path
+            ...($isDev ? [$package->getName(), $this->lockFile->path] : [$this->lockFile->path])
         ));
     }
 }

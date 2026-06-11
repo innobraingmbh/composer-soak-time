@@ -14,6 +14,19 @@ Two layers enforce this: recent versions are dropped from the solver pool, and i
 - Source installs are pinned by source reference and URL; dist downloads by archive sha256 when Composer exposes it. A dist install that hides its archive fails closed — reinstall with `--prefer-source`.
 - `SOAK_TIME_SKIP` bypasses only freshness; integrity checks still run.
 
+## Dev Branches (Mutable Versions)
+
+Stable versions are immutable: Packagist refuses to move a tag after it is indexed, and the plugin hard-fails on any drift from the recorded reference, URL, or archive hash.
+
+Dev versions (`dev-main`, `1.x-dev`, …) are mutable by design — the branch tip advances with every commit. Treating them as immutable would permanently break `composer update` once the branch moves past the first pinned SHA.
+
+The plugin requires an **explicit opt-in** via `extra.soak-time-dev-branches` (or `SOAK_TIME_DEV_BRANCHES`). For declared packages whose version is dev (`$package->isDev() === true`):
+
+- The source reference, source URL, and dist URL are **allowed to change** — the new reference is re-pinned on each update.
+- If the reference is **unchanged** but the downloaded archive's sha256 differs, the plugin **still hard-fails** — that is cache poisoning of a fixed SHA, not a branch advance.
+
+Undeclared dev versions behave like stable versions: any drift hard-fails with an error that names `soak-time-dev-branches` so the operator can decide whether to declare the package as mutable or investigate a potential compromise.
+
 ## Path Repositories
 
 Packages installed from `path` repositories are exempt from integrity pinning and drift checks. They are local code in the same trust domain as the root project: Composer symlinks or mirrors the directory without downloading an archive, so there is no sha256 and no source reference to pin. Anyone who can tamper with a path dependency already controls the project itself. The soak filter is likewise irrelevant for them — local code has no registry release date.
@@ -21,6 +34,8 @@ Packages installed from `path` repositories are exempt from integrity pinning an
 ## Trust Boundary
 
 First install of a version is trust-on-first-use: the plugin records what Composer resolved and downloaded, and that becomes the local source of truth. So commit `composer-integrity.lock` with `composer.lock`, review new entries like dependency updates (especially under `SOAK_TIME_SKIP`), and treat edits or deletions of entries as a security override. The first-seen install relies on Composer, the configured repositories, TLS, and local filesystem integrity.
+
+For dev branches declared in `soak-time-dev-branches`, each `composer update` that advances the branch tip overwrites the previous pin. Review these entries alongside the diff of the dependency itself.
 
 ## Out of Scope
 

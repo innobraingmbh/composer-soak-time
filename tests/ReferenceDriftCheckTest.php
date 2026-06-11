@@ -156,9 +156,84 @@ final class ReferenceDriftCheckTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
+    #[Test]
+    public function stable_version_with_drifted_reference_still_hard_fails(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', '1.0.0', str_repeat('a', 64), 'sha-original', null, null, new \DateTimeImmutable()
+        ));
+
+        // Even if vendor/pkg is listed in devBranches, a stable version must still hard-fail.
+        $check = new ReferenceDriftCheck($lock, ['vendor/pkg']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Integrity metadata drift for vendor/pkg@1.0.0');
+
+        $check->verify([$this->package('vendor/pkg', '1.0.0', 'sha-tampered')]);
+    }
+
+    #[Test]
+    public function undeclared_dev_version_with_drifted_reference_hard_fails_with_dev_hint(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-main', null, 'sha-original', null, null, new \DateTimeImmutable()
+        ));
+
+        // devBranches is empty — vendor/pkg is NOT declared as a mutable dev branch.
+        $check = new ReferenceDriftCheck($lock, []);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('soak-time-dev-branches');
+
+        $check->verify([$this->devPackage('vendor/pkg', 'dev-main', 'sha-new-commit')]);
+    }
+
+    #[Test]
+    public function declared_dev_version_with_changed_reference_passes(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-main', null, 'sha-original', null, null, new \DateTimeImmutable()
+        ));
+
+        $check = new ReferenceDriftCheck($lock, ['vendor/pkg']);
+
+        $check->verify([$this->devPackage('vendor/pkg', 'dev-main', 'sha-new-commit')]);
+
+        $this->addToAssertionCount(1);
+    }
+
+    #[Test]
+    public function declared_dev_version_with_wildcard_pattern_passes(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-main', null, 'sha-original', null, null, new \DateTimeImmutable()
+        ));
+
+        $check = new ReferenceDriftCheck($lock, ['vendor/*']);
+
+        $check->verify([$this->devPackage('vendor/pkg', 'dev-main', 'sha-new-commit')]);
+
+        $this->addToAssertionCount(1);
+    }
+
     private function package(string $name, string $version, string $sourceReference): Package
     {
         $package = new Package($name, $version.'.0', $version);
+        $package->setSourceReference($sourceReference);
+        $package->setSourceUrl('https://example.com/'.$name.'.git');
+        $package->setDistUrl('https://example.com/'.$name.'/'.$version.'.zip');
+
+        return $package;
+    }
+
+    private function devPackage(string $name, string $version, string $sourceReference): Package
+    {
+        // For dev-main the normalized version is also "dev-main".
+        $package = new Package($name, $version, $version);
         $package->setSourceReference($sourceReference);
         $package->setSourceUrl('https://example.com/'.$name.'.git');
         $package->setDistUrl('https://example.com/'.$name.'/'.$version.'.zip');

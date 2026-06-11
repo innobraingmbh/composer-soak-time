@@ -125,9 +125,64 @@ final class HashVerifierTest extends TestCase
         $this->assertFileDoesNotExist($this->lockPath);
     }
 
+    #[Test]
+    public function declared_dev_version_with_changed_reference_gets_repinned(): void
+    {
+        $oldSha = str_repeat('0', 64);
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-main', $oldSha, 'ref-old-sha', null, null, new \DateTimeImmutable()
+        ));
+
+        $verifier = new HashVerifier($lock, new NullIO(), ['vendor/pkg']);
+        $newPkg = $this->devPackage('vendor/pkg', 'dev-main', 'ref-new-sha');
+
+        $verifier->verify($this->event($newPkg));
+
+        $entry = $lock->lookup('vendor/pkg', 'dev-main');
+        $this->assertNotNull($entry);
+        $this->assertSame('ref-new-sha', $entry->sourceReference);
+        $this->assertSame(hash_file('sha256', $this->tarballPath), $entry->sha256);
+
+        $persisted = IntegrityLockFile::load($this->lockPath)->lookup('vendor/pkg', 'dev-main');
+        $this->assertNotNull($persisted);
+        $this->assertSame('ref-new-sha', $persisted->sourceReference);
+    }
+
+    #[Test]
+    public function declared_dev_version_with_unchanged_reference_but_mismatched_sha_still_hard_fails(): void
+    {
+        $sha = hash_file('sha256', $this->tarballPath);
+        $this->assertIsString($sha);
+
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-main', str_repeat('0', 64), 'ref-same', null, null, new \DateTimeImmutable()
+        ));
+
+        $verifier = new HashVerifier($lock, new NullIO(), ['vendor/pkg']);
+        // Same reference, but the recorded sha256 is all zeros while the real file hash differs.
+        $pkg = $this->devPackage('vendor/pkg', 'dev-main', 'ref-same');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Integrity check FAILED for vendor/pkg@dev-main');
+
+        $verifier->verify($this->event($pkg));
+    }
+
     private function package(string $name, string $version, string $sourceReference): Package
     {
         $package = new Package($name, $version.'.0', $version);
+        $package->setSourceReference($sourceReference);
+        $package->setSourceUrl('https://example.com/'.$name.'.git');
+        $package->setDistUrl('https://example.com/'.$name.'/'.$version.'.zip');
+
+        return $package;
+    }
+
+    private function devPackage(string $name, string $version, string $sourceReference): Package
+    {
+        $package = new Package($name, $version, $version);
         $package->setSourceReference($sourceReference);
         $package->setSourceUrl('https://example.com/'.$name.'.git');
         $package->setDistUrl('https://example.com/'.$name.'/'.$version.'.zip');

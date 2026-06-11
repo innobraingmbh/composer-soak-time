@@ -58,7 +58,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     public function onPrePoolCreate(PrePoolCreateEvent $event): void
     {
         if ($this->config->integrity) {
-            (new ReferenceDriftCheck($this->lockFile))->verify($event->getPackages());
+            (new ReferenceDriftCheck($this->lockFile, $this->config->devBranches))->verify($event->getPackages());
         }
 
         if ($this->config->skipAllSoak) {
@@ -94,7 +94,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        (new HashVerifier($this->lockFile, $this->io))->verify($event);
+        (new HashVerifier($this->lockFile, $this->io, $this->config->devBranches))->verify($event);
     }
 
     public function onPostPackageInstallOrUpdate(PackageEvent $event): void
@@ -109,7 +109,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        (new PackageIntegrityRecorder($this->lockFile, $this->io))->record($package);
+        (new PackageIntegrityRecorder($this->lockFile, $this->io, $this->config->devBranches))->record($package);
     }
 
     public function onPostCommand(): void
@@ -282,12 +282,53 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             }
         }
 
+        $devBranches = [];
+
+        if (isset($extra['soak-time-dev-branches']) && is_array($extra['soak-time-dev-branches'])) {
+            foreach (array_values($extra['soak-time-dev-branches']) as $entry) {
+                if (! is_string($entry) || ! PackageFilter::isValidWhitelistPattern($entry)) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid extra.soak-time-dev-branches entry "%s" — patterns must be "vendor/name"; the vendor must be a literal (no "*"), wildcards are only allowed in the name half (e.g. "your-company/*").</warning>',
+                        is_string($entry) ? $entry : get_debug_type($entry)
+                    ));
+
+                    continue;
+                }
+
+                $devBranches[] = $entry;
+            }
+        }
+
+        $envDevBranches = getenv('SOAK_TIME_DEV_BRANCHES');
+
+        if ($envDevBranches !== false && trim($envDevBranches) !== '') {
+            foreach (explode(',', $envDevBranches) as $entry) {
+                $entry = strtolower(trim($entry));
+
+                if ($entry === '') {
+                    continue;
+                }
+
+                if (! PackageFilter::isValidWhitelistPattern($entry)) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid SOAK_TIME_DEV_BRANCHES entry "%s" — patterns must be "vendor/name"; the vendor must be a literal (no "*"), wildcards are only allowed in the name half (e.g. "your-company/*").</warning>',
+                        $entry
+                    ));
+
+                    continue;
+                }
+
+                $devBranches[] = $entry;
+            }
+        }
+
         return new SoakTimeConfig(
             $minHours,
             $whitelist,
             $skipAllSoak,
             $integrity,
             $integrityLockPath,
+            $devBranches,
         );
     }
 

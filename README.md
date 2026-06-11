@@ -37,7 +37,8 @@ Default soak time is **168h (7 days)**. Configure via `extra` in `composer.json`
 {
     "extra": {
         "soak-time-hours": 168,
-        "soak-time-whitelist": ["roave/security-advisories", "your-company/*"]
+        "soak-time-whitelist": ["roave/security-advisories", "your-company/*"],
+        "soak-time-dev-branches": ["your-company/my-lib"]
     }
 }
 ```
@@ -47,6 +48,32 @@ Default soak time is **168h (7 days)**. Configure via `extra` in `composer.json`
 - Versions with no release date are filtered unless whitelisted. Whitelist path/internal repos only if you trust their metadata.
 
 Windows PowerShell sets env vars as `$env:SOAK_TIME_HOURS=336; composer update`.
+
+### Dev branches (`soak-time-dev-branches`)
+
+Dev versions like `dev-main` or `1.x-dev` are **mutable** — their `sourceReference` (git SHA) legitimately changes every time the branch advances. By default the plugin treats every version as immutable and hard-fails if a pinned reference drifts. That would make `composer update` permanently broken for any dev-branch dependency once the branch advances.
+
+Declare the packages whose dev versions are intentionally mutable:
+
+```json
+{
+    "extra": {
+        "soak-time-dev-branches": ["your-company/my-lib", "your-company/*"]
+    }
+}
+```
+
+Or pass the list as a comma-separated env var for a one-run override:
+
+```bash
+SOAK_TIME_DEV_BRANCHES=your-company/my-lib composer update
+```
+
+Patterns follow the same rules as the whitelist — vendor must be a literal, `*` is allowed only in the name half.
+
+**Security trade-off:** for a declared dev package, the source reference is allowed to advance when `isDev()` is true. However, if the reference is **unchanged** but the downloaded archive's sha256 differs, the plugin still hard-fails — that is cache poisoning of a fixed SHA, not legitimate branch movement. Stable versions are never treated as mutable regardless of this list.
+
+Undeclared dev versions whose reference changed are blocked with an error that names `soak-time-dev-branches` so you know how to unblock them after investigation.
 
 ## 🔐 Integrity lock file
 

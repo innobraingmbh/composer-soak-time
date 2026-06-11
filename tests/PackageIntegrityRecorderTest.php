@@ -106,6 +106,55 @@ final class PackageIntegrityRecorderTest extends TestCase
         $this->assertFileDoesNotExist($this->lockPath);
     }
 
+    #[Test]
+    public function declared_dev_version_with_changed_reference_gets_repinned(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg',
+            'dev-main',
+            null,
+            'ref-old-sha',
+            'https://example.com/vendor/pkg.git',
+            null,
+            new \DateTimeImmutable()
+        ));
+
+        $recorder = new PackageIntegrityRecorder($lock, new NullIO(), ['vendor/pkg']);
+        $recorder->record($this->devPackage('source', 'ref-new-sha'));
+
+        $entry = $lock->lookup('vendor/pkg', 'dev-main');
+        $this->assertNotNull($entry);
+        $this->assertSame('ref-new-sha', $entry->sourceReference);
+        $this->assertNull($entry->sha256);
+
+        $persisted = IntegrityLockFile::load($this->lockPath)->lookup('vendor/pkg', 'dev-main');
+        $this->assertNotNull($persisted);
+        $this->assertSame('ref-new-sha', $persisted->sourceReference);
+    }
+
+    #[Test]
+    public function undeclared_dev_version_with_changed_reference_hard_fails_with_hint(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg',
+            'dev-main',
+            null,
+            'ref-old-sha',
+            null,
+            null,
+            new \DateTimeImmutable()
+        ));
+
+        $recorder = new PackageIntegrityRecorder($lock, new NullIO(), []);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('soak-time-dev-branches');
+
+        $recorder->record($this->devPackage('source', 'ref-new-sha'));
+    }
+
     private function package(string $installationSource, ?string $sourceReference): Package
     {
         $package = new Package('vendor/pkg', '1.0.0.0', '1.0.0');
@@ -113,6 +162,17 @@ final class PackageIntegrityRecorderTest extends TestCase
         $package->setSourceReference($sourceReference);
         $package->setSourceUrl('https://example.com/vendor/pkg.git');
         $package->setDistUrl('https://example.com/vendor/pkg/1.0.0.zip');
+
+        return $package;
+    }
+
+    private function devPackage(string $installationSource, ?string $sourceReference): Package
+    {
+        $package = new Package('vendor/pkg', 'dev-main', 'dev-main');
+        $package->setInstallationSource($installationSource);
+        $package->setSourceReference($sourceReference);
+        $package->setSourceUrl('https://example.com/vendor/pkg.git');
+        $package->setDistUrl('https://example.com/vendor/pkg/dev-main.zip');
 
         return $package;
     }
