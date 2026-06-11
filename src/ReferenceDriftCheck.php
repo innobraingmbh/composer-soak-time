@@ -33,8 +33,9 @@ final class ReferenceDriftCheck
     {
         foreach ($packages as $package) {
             // Local path repositories live in the same trust domain as the
-            // root project and carry no immutable reference to defend.
-            if ($package->getDistType() === 'path') {
+            // root project and carry no immutable reference to defend. The dist
+            // type alone is spoofable, so confirm the URL is actually local.
+            if (PackageFilter::isLocalPathPackage($package)) {
                 continue;
             }
 

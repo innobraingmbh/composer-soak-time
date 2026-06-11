@@ -133,21 +133,17 @@ final class HashVerifier
         ), true, IOInterface::VERBOSE);
     }
 
+    /**
+     * Only a change in the git source reference (the content-addressed commit
+     * SHA) is an unforgeable proof of a legitimate branch advance. Source/dist
+     * URLs are attacker-controlled strings — letting them trigger a re-pin would
+     * let a poisoned archive bypass the sha256 comparison while the SHA is held
+     * fixed, which is exactly the cache-poisoning case we must hard-fail on.
+     */
     private function referenceChanged(PackageInterface $package, IntegrityEntry $entry): bool
     {
-        if ($entry->sourceReference !== null && $entry->sourceReference !== $package->getSourceReference()) {
-            return true;
-        }
-
-        if ($entry->sourceUrl !== null && $entry->sourceUrl !== $package->getSourceUrl()) {
-            return true;
-        }
-
-        if ($entry->distUrl !== null && $entry->distUrl !== $package->getDistUrl()) {
-            return true;
-        }
-
-        return false;
+        return $entry->sourceReference !== null
+            && $entry->sourceReference !== $package->getSourceReference();
     }
 
     private function repin(PackageInterface $package, string $sha256): void

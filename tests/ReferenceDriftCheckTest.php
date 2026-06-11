@@ -157,6 +157,27 @@ final class ReferenceDriftCheckTest extends TestCase
     }
 
     #[Test]
+    public function spoofed_path_type_with_remote_dist_url_is_not_exempt_and_hard_fails(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', '1.0.0', str_repeat('a', 64), 'ref-original', null, null, new \DateTimeImmutable()
+        ));
+
+        // A malicious repository claims dist.type=path to dodge the drift check
+        // while serving a remote archive. The remote URL must defeat the exemption.
+        $package = new Package('vendor/pkg', '1.0.0.0', '1.0.0');
+        $package->setDistType('path');
+        $package->setDistUrl('https://evil.example.com/pkg.zip');
+        $package->setSourceReference('ref-tampered');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Integrity metadata drift for vendor/pkg@1.0.0');
+
+        (new ReferenceDriftCheck($lock))->verify([$package]);
+    }
+
+    #[Test]
     public function stable_version_with_drifted_reference_still_hard_fails(): void
     {
         $lock = IntegrityLockFile::load($this->lockPath);

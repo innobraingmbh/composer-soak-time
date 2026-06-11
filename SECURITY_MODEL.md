@@ -22,14 +22,16 @@ Dev versions (`dev-main`, `1.x-dev`, …) are mutable by design — the branch t
 
 The plugin requires an **explicit opt-in** via `extra.soak-time-dev-branches` (or `SOAK_TIME_DEV_BRANCHES`). For declared packages whose version is dev (`$package->isDev() === true`):
 
-- The source reference, source URL, and dist URL are **allowed to change** — the new reference is re-pinned on each update.
-- If the reference is **unchanged** but the downloaded archive's sha256 differs, the plugin **still hard-fails** — that is cache poisoning of a fixed SHA, not a branch advance.
+- A re-pin is triggered **only** by a change in the git source reference (the content-addressed commit SHA) — the one field an attacker cannot forge without changing the code. The new reference, URLs, and archive sha256 are recorded on that advance.
+- If the source reference is **unchanged** but the downloaded archive's sha256 differs, the plugin **still hard-fails** — that is cache poisoning of a fixed SHA, not a branch advance. Source/dist URL changes alone never suppress the sha256 comparison.
 
 Undeclared dev versions behave like stable versions: any drift hard-fails with an error that names `soak-time-dev-branches` so the operator can decide whether to declare the package as mutable or investigate a potential compromise.
 
 ## Path Repositories
 
 Packages installed from `path` repositories are exempt from integrity pinning and drift checks. They are local code in the same trust domain as the root project: Composer symlinks or mirrors the directory without downloading an archive, so there is no sha256 and no source reference to pin. Anyone who can tamper with a path dependency already controls the project itself. The soak filter is likewise irrelevant for them — local code has no registry release date.
+
+Because `dist.type` is metadata an attacker-controlled repository can set, the exemption applies only when the dist URL is actually a local filesystem path. A package that claims `type: path` while pointing at a remote URL (`https://…`, `git@…`) is treated as a normal remote package and remains subject to pinning and drift checks.
 
 ## Trust Boundary
 

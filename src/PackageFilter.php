@@ -78,6 +78,32 @@ final class PackageFilter
     }
 
     /**
+     * A genuine `path` repository always resolves to a local filesystem path.
+     * `dist.type` itself is attacker-controlled metadata, so a non-path package
+     * served by a malicious repository could claim `type: path` to dodge
+     * integrity checks. Only exempt a path package when its dist URL is actually
+     * local — i.e. it carries no remote transport (scheme or scp-style host).
+     */
+    public static function isLocalPathPackage(PackageInterface $package): bool
+    {
+        if ($package->getDistType() !== 'path') {
+            return false;
+        }
+
+        $url = (string) $package->getDistUrl();
+
+        if ($url === '') {
+            return false;
+        }
+
+        if (preg_match('{^[a-z][a-z0-9+.\-]*://}i', $url) === 1) {
+            return false;
+        }
+
+        return preg_match('{^[^@/\\\\]+@[^:/]+:}', $url) !== 1;
+    }
+
+    /**
      * Vendor must be a literal so a single config line can never silently
      * whitelist every dependency.
      */

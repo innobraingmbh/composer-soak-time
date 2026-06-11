@@ -170,6 +170,26 @@ final class HashVerifierTest extends TestCase
         $verifier->verify($this->event($pkg));
     }
 
+    #[Test]
+    public function declared_dev_version_with_changed_dist_url_but_same_reference_still_hard_fails(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-main', str_repeat('0', 64), 'ref-same', null, 'https://example.com/old.zip', new \DateTimeImmutable()
+        ));
+
+        $verifier = new HashVerifier($lock, new NullIO(), ['vendor/pkg']);
+        // The git SHA is held fixed; only the dist URL moves while the archive
+        // is poisoned. A URL change must not let the new archive be re-pinned.
+        $pkg = $this->devPackage('vendor/pkg', 'dev-main', 'ref-same');
+        $pkg->setDistUrl('https://example.com/new.zip');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Integrity check FAILED for vendor/pkg@dev-main');
+
+        $verifier->verify($this->event($pkg));
+    }
+
     private function package(string $name, string $version, string $sourceReference): Package
     {
         $package = new Package($name, $version.'.0', $version);

@@ -21,7 +21,7 @@ final class PackageIntegrityRecorder
         $name = $package->getName();
         $version = $package->getPrettyVersion();
 
-        if ($package->getDistType() === 'path') {
+        if (PackageFilter::isLocalPathPackage($package)) {
             $this->io->write(sprintf(
                 '<info>[Soak Time] Skipping integrity pinning for %s@%s (local path repository).</info>',
                 $name,
@@ -87,21 +87,16 @@ final class PackageIntegrityRecorder
         ), true, IOInterface::VERBOSE);
     }
 
+    /**
+     * Only a change in the git source reference (the content-addressed commit
+     * SHA) is an unforgeable proof of a legitimate branch advance. Source/dist
+     * URLs are attacker-controlled strings and must not trigger a re-pin on
+     * their own.
+     */
     private function referenceChanged(PackageInterface $package, IntegrityEntry $entry): bool
     {
-        if ($entry->sourceReference !== null && $entry->sourceReference !== $package->getSourceReference()) {
-            return true;
-        }
-
-        if ($entry->sourceUrl !== null && $entry->sourceUrl !== $package->getSourceUrl()) {
-            return true;
-        }
-
-        if ($entry->distUrl !== null && $entry->distUrl !== $package->getDistUrl()) {
-            return true;
-        }
-
-        return false;
+        return $entry->sourceReference !== null
+            && $entry->sourceReference !== $package->getSourceReference();
     }
 
     private function repin(PackageInterface $package): void
