@@ -26,6 +26,12 @@ final class ReferenceDriftCheck
     public function verify(iterable $packages): void
     {
         foreach ($packages as $package) {
+            // Local path repositories live in the same trust domain as the
+            // root project and carry no immutable reference to defend.
+            if ($package->getDistType() === 'path') {
+                continue;
+            }
+
             $entry = $this->lockFile->lookup($package->getName(), $package->getPrettyVersion());
 
             if ($entry === null) {

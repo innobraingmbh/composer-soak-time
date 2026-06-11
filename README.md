@@ -52,6 +52,8 @@ Windows PowerShell sets env vars as `$env:SOAK_TIME_HOURS=336; composer update`.
 
 `composer-integrity.lock` records each version's `sha256` (when Composer exposes the archive), `sourceReference`, `sourceUrl`, `distUrl`, and `firstSeenAt`. **Commit it alongside `composer.lock`** — later installs verify against it and hard-fail on drift.
 
+Packages from [`path` repositories](https://getcomposer.org/doc/05-repositories.md#path) are exempt from integrity pinning entirely: they are local code in the same trust domain as the root project, have no archive hash or source reference to pin, and would otherwise fail every install.
+
 Some paths (including plugin self-update) install from dist without exposing the archive; the plugin then fails closed — fix with `composer global reinstall innobrain/soak-time --prefer-source`. Opt out (not recommended) with `soak-time-integrity: false`, or relocate via `soak-time-integrity-lock`:
 
 ```json

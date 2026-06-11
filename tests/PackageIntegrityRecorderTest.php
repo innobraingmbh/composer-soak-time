@@ -92,6 +92,20 @@ final class PackageIntegrityRecorderTest extends TestCase
         $recorder->record($this->package('dist', 'source-ref'));
     }
 
+    #[Test]
+    public function path_repository_package_is_not_pinned(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $recorder = new PackageIntegrityRecorder($lock, new NullIO());
+
+        // Reproduces the reported failure: a path-repo dev package has no
+        // dist hash and no source reference, so there is nothing to pin.
+        $recorder->record($this->pathPackage('dev-master'));
+
+        $this->assertNull($lock->lookup('vendor/pkg', 'dev-master'));
+        $this->assertFileDoesNotExist($this->lockPath);
+    }
+
     private function package(string $installationSource, ?string $sourceReference): Package
     {
         $package = new Package('vendor/pkg', '1.0.0.0', '1.0.0');
@@ -99,6 +113,16 @@ final class PackageIntegrityRecorderTest extends TestCase
         $package->setSourceReference($sourceReference);
         $package->setSourceUrl('https://example.com/vendor/pkg.git');
         $package->setDistUrl('https://example.com/vendor/pkg/1.0.0.zip');
+
+        return $package;
+    }
+
+    private function pathPackage(string $version): Package
+    {
+        $package = new Package('vendor/pkg', $version, $version);
+        $package->setDistType('path');
+        $package->setDistUrl('../packages/pkg');
+        $package->setInstallationSource('dist');
 
         return $package;
     }

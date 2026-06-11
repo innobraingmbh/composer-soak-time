@@ -137,6 +137,25 @@ final class ReferenceDriftCheckTest extends TestCase
         (new ReferenceDriftCheck($lock))->verify([$package]);
     }
 
+    #[Test]
+    public function path_repository_package_is_skipped_even_when_a_recorded_entry_drifts(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', 'dev-master', null, 'ref-from-packagist', null, 'https://example.com/old.zip', new \DateTimeImmutable()
+        ));
+
+        // The dependency switched to a local path repository; its stale
+        // Packagist entry must not brick updates.
+        $package = new Package('vendor/pkg', 'dev-master', 'dev-master');
+        $package->setDistType('path');
+        $package->setDistUrl('../packages/pkg');
+
+        (new ReferenceDriftCheck($lock))->verify([$package]);
+
+        $this->addToAssertionCount(1);
+    }
+
     private function package(string $name, string $version, string $sourceReference): Package
     {
         $package = new Package($name, $version.'.0', $version);

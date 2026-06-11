@@ -16,6 +16,17 @@ final class PackageIntegrityRecorder
     {
         $name = $package->getName();
         $version = $package->getPrettyVersion();
+
+        if ($package->getDistType() === 'path') {
+            $this->io->write(sprintf(
+                '<info>[Soak Time] Skipping integrity pinning for %s@%s (local path repository).</info>',
+                $name,
+                $version
+            ), true, IOInterface::VERBOSE);
+
+            return;
+        }
+
         $entry = $this->lockFile->lookup($name, $version);
 
         if ($entry !== null) {
