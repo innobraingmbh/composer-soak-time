@@ -34,10 +34,7 @@ final class PackageIntegrityRecorder
         $entry = $this->lockFile->lookup($name, $version);
 
         if ($entry !== null) {
-            $isMutableDev = $package->isDev()
-                && PackageFilter::matchesWhitelist($name, $this->devBranches);
-
-            if ($isMutableDev && $this->referenceChanged($package, $entry)) {
+            if ($this->mutableDevAdvanced($package, $entry)) {
                 $this->repin($package);
 
                 return;
@@ -88,13 +85,17 @@ final class PackageIntegrityRecorder
     }
 
     /**
-     * Only a change in the git source reference (the content-addressed commit
-     * SHA) is an unforgeable proof of a legitimate branch advance. Source/dist
-     * URLs are attacker-controlled strings and must not trigger a re-pin on
-     * their own.
+     * Re-pinning overwrites recorded integrity evidence, so it is only safe for
+     * a package declared as a mutable dev branch — elsewhere a changed reference
+     * is tampering and must hard-fail. Only the unforgeable git SHA counts as an
+     * advance; attacker-controlled URLs never trigger a re-pin.
      */
-    private function referenceChanged(PackageInterface $package, IntegrityEntry $entry): bool
+    private function mutableDevAdvanced(PackageInterface $package, IntegrityEntry $entry): bool
     {
+        if (! $package->isDev() || ! PackageFilter::matchesWhitelist($package->getName(), $this->devBranches)) {
+            return false;
+        }
+
         return $entry->sourceReference !== null
             && $entry->sourceReference !== $package->getSourceReference();
     }
