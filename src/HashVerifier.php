@@ -18,11 +18,13 @@ final class HashVerifier
 {
     /**
      * @param  list<string>  $devBranches  Package-name patterns declared as mutable dev branches.
+     * @param  list<string>  $integrityIgnore  Package-name patterns exempted from integrity checks entirely.
      */
     public function __construct(
         private readonly IntegrityLockFile $lockFile,
         private readonly IOInterface $io,
         private readonly array $devBranches = [],
+        private readonly array $integrityIgnore = [],
     ) {}
 
     public function verify(PostFileDownloadEvent $event): void
@@ -34,6 +36,13 @@ final class HashVerifier
         $package = $event->getContext();
 
         if (! $package instanceof PackageInterface) {
+            return;
+        }
+
+        // Explicitly ignored packages opt out of integrity checks entirely —
+        // the escape hatch for multi-archive installs one package@version can't
+        // represent (e.g. statamic/cms via pixelfear/composer-dist-plugin).
+        if (PackageFilter::matchesWhitelist($package->getName(), $this->integrityIgnore)) {
             return;
         }
 
@@ -70,7 +79,7 @@ final class HashVerifier
                 return;
             }
 
-            (new ReferenceDriftCheck($this->lockFile, $this->devBranches))->verify([$package]);
+            (new ReferenceDriftCheck($this->lockFile, $this->devBranches, $this->integrityIgnore))->verify([$package]);
 
             if ($entry->sha256 === null) {
                 throw new \RuntimeException(sprintf(

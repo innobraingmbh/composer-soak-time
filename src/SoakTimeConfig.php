@@ -8,6 +8,7 @@ final class SoakTimeConfig
      * @param  list<string>  $whitelist
      * @param  bool  $skipAllSoak  Emergency switch (SOAK_TIME_SKIP=1) — disables soak filtering only.
      * @param  list<string>  $devBranches  Package-name patterns whose dev versions are treated as mutable.
+     * @param  list<string>  $integrityIgnore  Package-name patterns exempted from integrity checks entirely.
      */
     public function __construct(
         public readonly int $minHours,
@@ -16,6 +17,7 @@ final class SoakTimeConfig
         public readonly bool $integrity = true,
         public readonly string $integrityLockPath = 'composer-integrity.lock',
         public readonly array $devBranches = [],
+        public readonly array $integrityIgnore = [],
     ) {}
 
     /**

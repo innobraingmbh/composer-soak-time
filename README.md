@@ -75,6 +75,35 @@ Patterns follow the same rules as the whitelist — vendor must be a literal, `*
 
 Undeclared dev versions whose reference changed are blocked with an error that names `soak-time-dev-branches` so you know how to unblock them after investigation.
 
+### Ignoring packages (`soak-time-integrity-ignore`)
+
+Some Composer plugins install **multiple dist archives under a single `package@version`**. The clearest example is `statamic/cms`, which uses [`pixelfear/composer-dist-plugin`](https://github.com/pixelfear/composer-dist-plugin) to fetch both `dist.tar.gz` and `dist-frontend.tar.gz` — both presenting as `statamic/cms@dist`. The integrity model keys one set of metadata per `package@version`, so the second archive looks exactly like a drifted dist URL and hard-fails:
+
+```
+[Soak Time] Integrity metadata drift for statamic/cms@dist.
+  Field:     dist URL
+  Recorded:  …/v5.73.24/dist.tar.gz
+  Candidate: …/v5.73.24/dist-frontend.tar.gz
+```
+
+There is no safe way to auto-support this: accepting a new dist URL under an already-pinned version on a package's say-so is precisely the altered-historical-release surface the plugin exists to close. Instead, manually greenlight the package after verifying its installs:
+
+```json
+{
+    "extra": {
+        "soak-time-integrity-ignore": ["statamic/cms"]
+    }
+}
+```
+
+Or as a comma-separated env var for a one-run override:
+
+```bash
+SOAK_TIME_INTEGRITY_IGNORE=statamic/cms composer update
+```
+
+Patterns follow the same rules as the whitelist — vendor must be a literal, `*` is allowed only in the name half. A listed package is exempt from **all** integrity checks (drift, hash, and recording); a warning naming the ignored package(s) is printed on every run so the weakened coverage stays visible. The soak/freshness filter is unaffected.
+
 ## 🔐 Integrity lock file
 
 `composer-integrity.lock` records each version's `sha256` (when Composer exposes the archive), `sourceReference`, `sourceUrl`, `distUrl`, and `firstSeenAt`. **Commit it alongside `composer.lock`** — later installs verify against it and hard-fail on drift.

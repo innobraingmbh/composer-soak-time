@@ -241,6 +241,64 @@ final class ReferenceDriftCheckTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
+    #[Test]
+    public function ignored_package_with_drifted_dist_url_passes(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', '1.0.0', str_repeat('a', 64), 'ref-stable', null, 'https://example.com/original.zip', new \DateTimeImmutable()
+        ));
+
+        $check = new ReferenceDriftCheck($lock, [], ['vendor/pkg']);
+
+        $package = $this->package('vendor/pkg', '1.0.0', 'ref-stable');
+        $package->setDistUrl('https://example.com/rewritten.zip');
+
+        $check->verify([$package]);
+
+        $this->addToAssertionCount(1);
+    }
+
+    #[Test]
+    public function ignored_package_tolerates_a_second_dist_archive_under_one_version(): void
+    {
+        // Reproduces the statamic/cms case: pixelfear/composer-dist-plugin pulls
+        // two archives (dist.tar.gz, dist-frontend.tar.gz) that both present as
+        // statamic/cms@dist. The first is recorded; the second collides on the key.
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'statamic/cms', 'dist', str_repeat('a', 64), null, null,
+            'https://github.com/statamic/cms/releases/download/v5.73.24/dist.tar.gz',
+            new \DateTimeImmutable()
+        ));
+
+        $frontend = new Package('statamic/cms', 'dist', 'dist');
+        $frontend->setDistUrl('https://github.com/statamic/cms/releases/download/v5.73.24/dist-frontend.tar.gz');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Integrity metadata drift for statamic/cms@dist');
+
+        (new ReferenceDriftCheck($lock))->verify([$frontend]);
+    }
+
+    #[Test]
+    public function ignored_statamic_tolerates_a_second_dist_archive_under_one_version(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'statamic/cms', 'dist', str_repeat('a', 64), null, null,
+            'https://github.com/statamic/cms/releases/download/v5.73.24/dist.tar.gz',
+            new \DateTimeImmutable()
+        ));
+
+        $frontend = new Package('statamic/cms', 'dist', 'dist');
+        $frontend->setDistUrl('https://github.com/statamic/cms/releases/download/v5.73.24/dist-frontend.tar.gz');
+
+        (new ReferenceDriftCheck($lock, [], ['statamic/cms']))->verify([$frontend]);
+
+        $this->addToAssertionCount(1);
+    }
+
     private function package(string $name, string $version, string $sourceReference): Package
     {
         $package = new Package($name, $version.'.0', $version);

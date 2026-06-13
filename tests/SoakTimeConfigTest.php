@@ -81,4 +81,20 @@ final class SoakTimeConfigTest extends TestCase
 
         $this->assertSame(['vendor/pkg', 'vendor/*'], $config->devBranches);
     }
+
+    #[Test]
+    public function it_defaults_integrity_ignore_to_an_empty_array(): void
+    {
+        $config = new SoakTimeConfig(168, [], false);
+
+        $this->assertSame([], $config->integrityIgnore);
+    }
+
+    #[Test]
+    public function it_exposes_integrity_ignore_when_provided(): void
+    {
+        $config = new SoakTimeConfig(168, [], false, true, 'composer-integrity.lock', [], ['statamic/cms']);
+
+        $this->assertSame(['statamic/cms'], $config->integrityIgnore);
+    }
 }

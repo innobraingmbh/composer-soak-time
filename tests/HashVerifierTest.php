@@ -190,6 +190,32 @@ final class HashVerifierTest extends TestCase
         $verifier->verify($this->event($pkg));
     }
 
+    #[Test]
+    public function ignored_package_is_skipped_even_when_its_recorded_hash_mismatches(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $lock->record(new IntegrityEntry(
+            'vendor/pkg', '1.0.0', str_repeat('0', 64), 'ref-abc', null, null, new \DateTimeImmutable()
+        ));
+        $verifier = new HashVerifier($lock, new NullIO(), [], ['vendor/pkg']);
+
+        $verifier->verify($this->event($this->package('vendor/pkg', '1.0.0', 'ref-abc')));
+
+        $this->addToAssertionCount(1);
+    }
+
+    #[Test]
+    public function ignored_package_is_not_pinned_on_first_sight(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $verifier = new HashVerifier($lock, new NullIO(), [], ['vendor/pkg']);
+
+        $verifier->verify($this->event($this->package('vendor/pkg', '1.0.0', 'ref-abc')));
+
+        $this->assertNull($lock->lookup('vendor/pkg', '1.0.0'));
+        $this->assertFileDoesNotExist($this->lockPath);
+    }
+
     private function package(string $name, string $version, string $sourceReference): Package
     {
         $package = new Package($name, $version.'.0', $version);

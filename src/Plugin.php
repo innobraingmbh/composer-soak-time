@@ -58,7 +58,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     public function onPrePoolCreate(PrePoolCreateEvent $event): void
     {
         if ($this->config->integrity) {
-            (new ReferenceDriftCheck($this->lockFile, $this->config->devBranches))->verify($event->getPackages());
+            (new ReferenceDriftCheck($this->lockFile, $this->config->devBranches, $this->config->integrityIgnore))
+                ->verify($event->getPackages());
         }
 
         if ($this->config->skipAllSoak) {
@@ -94,7 +95,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        (new HashVerifier($this->lockFile, $this->io, $this->config->devBranches))->verify($event);
+        (new HashVerifier($this->lockFile, $this->io, $this->config->devBranches, $this->config->integrityIgnore))
+            ->verify($event);
     }
 
     public function onPostPackageInstallOrUpdate(PackageEvent $event): void
@@ -109,7 +111,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        (new PackageIntegrityRecorder($this->lockFile, $this->io, $this->config->devBranches))->record($package);
+        (new PackageIntegrityRecorder($this->lockFile, $this->io, $this->config->devBranches, $this->config->integrityIgnore))
+            ->record($package);
     }
 
     public function onPostCommand(): void
@@ -322,6 +325,53 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             }
         }
 
+        $integrityIgnore = [];
+
+        if (isset($extra['soak-time-integrity-ignore']) && is_array($extra['soak-time-integrity-ignore'])) {
+            foreach (array_values($extra['soak-time-integrity-ignore']) as $entry) {
+                if (! is_string($entry) || ! PackageFilter::isValidWhitelistPattern($entry)) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid extra.soak-time-integrity-ignore entry "%s" — patterns must be "vendor/name"; the vendor must be a literal (no "*"), wildcards are only allowed in the name half (e.g. "your-company/*").</warning>',
+                        is_string($entry) ? $entry : get_debug_type($entry)
+                    ));
+
+                    continue;
+                }
+
+                $integrityIgnore[] = $entry;
+            }
+        }
+
+        $envIntegrityIgnore = getenv('SOAK_TIME_INTEGRITY_IGNORE');
+
+        if ($envIntegrityIgnore !== false && trim($envIntegrityIgnore) !== '') {
+            foreach (explode(',', $envIntegrityIgnore) as $entry) {
+                $entry = strtolower(trim($entry));
+
+                if ($entry === '') {
+                    continue;
+                }
+
+                if (! PackageFilter::isValidWhitelistPattern($entry)) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid SOAK_TIME_INTEGRITY_IGNORE entry "%s" — patterns must be "vendor/name"; the vendor must be a literal (no "*"), wildcards are only allowed in the name half (e.g. "your-company/*").</warning>',
+                        $entry
+                    ));
+
+                    continue;
+                }
+
+                $integrityIgnore[] = $entry;
+            }
+        }
+
+        if ($integrity && $integrityIgnore !== []) {
+            $this->io->writeError(sprintf(
+                '<warning>[Soak Time] Integrity checks DISABLED for package(s): %s. Drift and hash verification will not run for these — only ignore packages whose installs (e.g. multi-archive Composer plugins) you have manually verified.</warning>',
+                implode(', ', $integrityIgnore)
+            ));
+        }
+
         return new SoakTimeConfig(
             $minHours,
             $whitelist,
@@ -329,6 +379,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $integrity,
             $integrityLockPath,
             $devBranches,
+            $integrityIgnore,
         );
     }
 

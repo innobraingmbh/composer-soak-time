@@ -33,6 +33,12 @@ Packages installed from `path` repositories are exempt from integrity pinning an
 
 Because `dist.type` is metadata an attacker-controlled repository can set, the exemption applies only when the dist URL is actually a local filesystem path. A package that claims `type: path` while pointing at a remote URL (`https://…`, `git@…`) is treated as a normal remote package and remains subject to pinning and drift checks.
 
+## Ignored Packages
+
+Some Composer plugins install several dist archives under a single `name@version` — `statamic/cms`, via `pixelfear/composer-dist-plugin`, fetches both `dist.tar.gz` and `dist-frontend.tar.gz` as `statamic/cms@dist`. The integrity model records one set of metadata per `name@version`, so the second archive is indistinguishable from a drifted dist URL and hard-fails.
+
+This is deliberately not auto-handled: relaxing the key to accept multiple dist URLs under one pinned version would mean trusting attacker-influenceable package metadata to vouch for a new URL — exactly the altered-historical-release surface the plugin closes. Instead, `extra.soak-time-integrity-ignore` (or `SOAK_TIME_INTEGRITY_IGNORE`) is an **explicit operator opt-in** that exempts a package from all integrity checks — drift, hash, and recording. A package can only be ignored by editing the project's own config, which is already inside the trust boundary; an attacker who can do that can remove the plugin outright. The exemption is loud: the ignored package(s) are named in a warning on every run, and the soak/freshness filter still applies. Treat additions to this list as a security override and verify the package's installs before adding it.
+
 ## Trust Boundary
 
 First install of a version is trust-on-first-use: the plugin records what Composer resolved and downloaded, and that becomes the local source of truth. So commit `composer-integrity.lock` with `composer.lock`, review new entries like dependency updates (especially under `SOAK_TIME_SKIP`), and treat edits or deletions of entries as a security override. The first-seen install relies on Composer, the configured repositories, TLS, and local filesystem integrity.

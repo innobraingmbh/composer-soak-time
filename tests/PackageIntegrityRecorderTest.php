@@ -155,6 +155,20 @@ final class PackageIntegrityRecorderTest extends TestCase
         $recorder->record($this->devPackage('source', 'ref-new-sha'));
     }
 
+    #[Test]
+    public function ignored_package_is_not_pinned(): void
+    {
+        $lock = IntegrityLockFile::load($this->lockPath);
+        $recorder = new PackageIntegrityRecorder($lock, new NullIO(), [], ['vendor/pkg']);
+
+        // A dist install with no observed hash would normally hard-fail; the
+        // ignore list opts the package out before any of that runs.
+        $recorder->record($this->package('dist', 'source-ref'));
+
+        $this->assertNull($lock->lookup('vendor/pkg', '1.0.0'));
+        $this->assertFileDoesNotExist($this->lockPath);
+    }
+
     private function package(string $installationSource, ?string $sourceReference): Package
     {
         $package = new Package('vendor/pkg', '1.0.0.0', '1.0.0');

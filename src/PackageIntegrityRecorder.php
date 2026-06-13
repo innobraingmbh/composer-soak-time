@@ -9,17 +9,29 @@ final class PackageIntegrityRecorder
 {
     /**
      * @param  list<string>  $devBranches  Package-name patterns declared as mutable dev branches.
+     * @param  list<string>  $integrityIgnore  Package-name patterns exempted from integrity checks entirely.
      */
     public function __construct(
         private readonly IntegrityLockFile $lockFile,
         private readonly IOInterface $io,
         private readonly array $devBranches = [],
+        private readonly array $integrityIgnore = [],
     ) {}
 
     public function record(PackageInterface $package): void
     {
         $name = $package->getName();
         $version = $package->getPrettyVersion();
+
+        if (PackageFilter::matchesWhitelist($name, $this->integrityIgnore)) {
+            $this->io->write(sprintf(
+                '<info>[Soak Time] Skipping integrity pinning for %s@%s (declared in soak-time-integrity-ignore).</info>',
+                $name,
+                $version
+            ), true, IOInterface::VERBOSE);
+
+            return;
+        }
 
         if (PackageFilter::isLocalPathPackage($package)) {
             $this->io->write(sprintf(
@@ -40,7 +52,7 @@ final class PackageIntegrityRecorder
                 return;
             }
 
-            (new ReferenceDriftCheck($this->lockFile, $this->devBranches))->verify([$package]);
+            (new ReferenceDriftCheck($this->lockFile, $this->devBranches, $this->integrityIgnore))->verify([$package]);
 
             if ($package->getInstallationSource() === 'dist' && $entry->sha256 === null) {
                 throw $this->unobservedDistArchive($name, $version);

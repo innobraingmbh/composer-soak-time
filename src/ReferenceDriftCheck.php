@@ -16,10 +16,12 @@ final class ReferenceDriftCheck
 {
     /**
      * @param  list<string>  $devBranches  Package-name patterns declared as mutable dev branches.
+     * @param  list<string>  $integrityIgnore  Package-name patterns exempted from integrity checks entirely.
      */
     public function __construct(
         private readonly IntegrityLockFile $lockFile,
         private readonly array $devBranches = [],
+        private readonly array $integrityIgnore = [],
     ) {}
 
     /**
@@ -32,6 +34,14 @@ final class ReferenceDriftCheck
     public function verify(iterable $packages): void
     {
         foreach ($packages as $package) {
+            // Explicitly ignored packages opt out of integrity checks entirely.
+            // This is the escape hatch for installs the model can't represent —
+            // e.g. a Composer plugin that fetches several dist archives under one
+            // package@version (statamic/cms via pixelfear/composer-dist-plugin).
+            if (PackageFilter::matchesWhitelist($package->getName(), $this->integrityIgnore)) {
+                continue;
+            }
+
             // Local path repositories live in the same trust domain as the
             // root project and carry no immutable reference to defend. The dist
             // type alone is spoofable, so confirm the URL is actually local.
