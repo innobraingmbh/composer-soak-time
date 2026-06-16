@@ -10,6 +10,7 @@ Two layers enforce this: recent versions are dropped from the solver pool, and i
 ## Enforced
 
 - Recent versions are filtered unless whitelisted; so are versions with no release date, except platform packages like `php` and `ext-*`.
+- The freshness clock prefers Packagist's server-stamped `published-time` over `time`. `time` is the tag's committer timestamp, which whoever publishes a release can backdate to make a fresh version look mature and slip past the soak window; `published-time` is recorded by the registry at publish and cannot be moved earlier. The field never reaches Composer's package objects, so the plugin reads it back from the repository metadata cache that Composer populates while building the solver pool. It is preferred when present and falls back to `time` otherwise — for older releases predating the field and for non-Packagist sources (Satis, VCS, artifact) that do not emit it — so the change can only tighten the filter, never loosen it.
 - Lock entries fail closed: malformed or incomplete data stops the run.
 - Source installs are pinned by source reference and URL; dist downloads by archive sha256 when Composer exposes it. A dist install that hides its archive fails closed — reinstall with `--prefer-source`.
 - `SOAK_TIME_SKIP` bypasses only freshness; integrity checks still run.

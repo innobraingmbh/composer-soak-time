@@ -8,13 +8,19 @@ use Composer\Repository\PlatformRepository;
 
 /**
  * Defends against the new-release attack: a fresh malicious tag (typosquat,
- * account takeover, malicious co-maintainer push). Filters by Packagist's
- * `time` field — the committer timestamp of the tag's commit. An attacker
- * force-pushing an *old* tag can backdate that timestamp, so this filter is
- * NOT the defense against altered historical releases. See ReferenceDriftCheck.
+ * account takeover, malicious co-maintainer push). Prefers Packagist's
+ * server-stamped `published-time` (via PublishedTimeResolver) and falls back to
+ * the `time` field — the committer timestamp of the tag's commit. Because
+ * `time` is attacker-controllable, a backdated tag can look old; `published-time`
+ * cannot be moved earlier, so it closes that bypass wherever it is available.
+ * Neither field defends against altered historical releases — see ReferenceDriftCheck.
  */
 final class PackageFilter
 {
+    public function __construct(
+        private readonly PublishedTimeResolver $publishedTime = new PublishedTimeResolver(),
+    ) {}
+
     /**
      * Drop every package version published after the given threshold. Versions
      * with no known release date are also dropped unless explicitly whitelisted.
@@ -46,7 +52,7 @@ final class PackageFilter
                 continue;
             }
 
-            $releaseDate = $package->getReleaseDate();
+            $releaseDate = $this->publishedTime->resolve($package) ?? $package->getReleaseDate();
 
             if ($releaseDate === null || $releaseDate > $threshold) {
                 $droppedByName[$package->getName()][] = $package;

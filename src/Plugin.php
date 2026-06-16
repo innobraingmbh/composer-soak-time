@@ -32,11 +32,14 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private IntegrityLockFile $lockFile;
 
+    private PublishedTimeResolver $publishedTime;
+
     public function activate(Composer $composer, IOInterface $io): void
     {
         $this->io = $io;
         $this->config = $this->resolveConfig($composer->getPackage()->getExtra());
         $this->lockFile = IntegrityLockFile::load($this->resolveLockPath());
+        $this->publishedTime = new PublishedTimeResolver();
     }
 
     public function deactivate(Composer $composer, IOInterface $io): void {}
@@ -78,7 +81,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
         $threshold = (new \DateTimeImmutable())->modify("-{$this->config->minHours} hours");
 
-        $result = (new PackageFilter())->filter(
+        $result = (new PackageFilter($this->publishedTime))->filter(
             $event->getPackages(),
             $threshold,
             $this->config->whitelist
@@ -468,7 +471,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $newest = null;
 
         foreach ($packages as $package) {
-            $releaseDate = $package->getReleaseDate();
+            $releaseDate = $this->publishedTime->resolve($package) ?? $package->getReleaseDate();
 
             if ($releaseDate !== null && ($newest === null || $releaseDate > $newest)) {
                 $newest = $releaseDate;
