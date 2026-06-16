@@ -26,6 +26,25 @@ final class PublishedTimeResolver
     /** @var array<string, array<string, \DateTimeImmutable>> Parsed provider files, keyed by cache path. */
     private array $byProviderFile = [];
 
+    /**
+     * The package's effective release date and where it came from: the
+     * server-stamped `published-time` when available, otherwise the package's
+     * self-reported `time`, otherwise none. This is the single source of truth
+     * for both the filter decision and its reporting.
+     */
+    public function releaseTime(PackageInterface $package): ReleaseTime
+    {
+        $published = $this->resolve($package);
+
+        if ($published !== null) {
+            return new ReleaseTime($published, ReleaseTimeSource::Published);
+        }
+
+        $time = $package->getReleaseDate();
+
+        return new ReleaseTime($time, $time !== null ? ReleaseTimeSource::Committer : ReleaseTimeSource::None);
+    }
+
     public function resolve(PackageInterface $package): ?\DateTimeInterface
     {
         $cache = self::cacheFor($package);

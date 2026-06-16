@@ -11,6 +11,7 @@ use Composer\Util\Filesystem;
 use Composer\Util\HttpDownloader;
 use Innobrain\SoakTime\PackageFilter;
 use Innobrain\SoakTime\PublishedTimeResolver;
+use Innobrain\SoakTime\ReleaseTimeSource;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -141,6 +142,48 @@ final class PublishedTimeResolverTest extends TestCase
         $package = new Package('vendor/name', '2.0.0.0', '2.0.0');
 
         $this->assertNull((new PublishedTimeResolver())->resolve($package));
+    }
+
+    #[Test]
+    public function release_time_reports_the_server_stamped_source_when_published_time_is_present(): void
+    {
+        $repository = $this->repository('https://repo.example.org');
+        $this->writeProvider($repository, 'provider-vendor~name.json', 'vendor/name', [
+            ['version_normalized' => '2.0.0.0', 'published-time' => '2026-03-03T00:00:00+00:00'],
+        ]);
+
+        // A backdated `time` is present but published-time must win.
+        $package = new Package('vendor/name', '2.0.0.0', '2.0.0');
+        $package->setReleaseDate(new \DateTimeImmutable('2000-01-01T00:00:00+00:00'));
+        $package->setRepository($repository);
+
+        $releaseTime = (new PublishedTimeResolver())->releaseTime($package);
+
+        $this->assertSame(ReleaseTimeSource::Published, $releaseTime->source);
+        $this->assertEquals(new \DateTimeImmutable('2026-03-03T00:00:00+00:00'), $releaseTime->date);
+    }
+
+    #[Test]
+    public function release_time_falls_back_to_the_self_reported_source(): void
+    {
+        $package = new Package('vendor/name', '2.0.0.0', '2.0.0');
+        $package->setReleaseDate(new \DateTimeImmutable('2026-01-01T00:00:00+00:00'));
+
+        $releaseTime = (new PublishedTimeResolver())->releaseTime($package);
+
+        $this->assertSame(ReleaseTimeSource::Committer, $releaseTime->source);
+        $this->assertEquals(new \DateTimeImmutable('2026-01-01T00:00:00+00:00'), $releaseTime->date);
+    }
+
+    #[Test]
+    public function release_time_is_none_when_no_date_is_available(): void
+    {
+        $package = new Package('vendor/name', '2.0.0.0', '2.0.0');
+
+        $releaseTime = (new PublishedTimeResolver())->releaseTime($package);
+
+        $this->assertSame(ReleaseTimeSource::None, $releaseTime->source);
+        $this->assertNull($releaseTime->date);
     }
 
     #[Test]

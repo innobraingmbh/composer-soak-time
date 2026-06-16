@@ -407,6 +407,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $this->io->isVerbose() ? '' : ' Run with -v for details.'
         ));
 
+        $this->io->write($this->describeSourceBreakdown($result));
+
         foreach ($result->fullyDroppedNames() as $name) {
             $this->warnFullyDropped($name, $result->droppedByName[$name]);
         }
@@ -417,21 +419,63 @@ class Plugin implements PluginInterface, EventSubscriberInterface
      */
     private function describeDropped(string $name, array $packages): string
     {
-        $versions = array_map(
-            static fn (PackageInterface $package): string => $package->getPrettyVersion(),
-            $packages
-        );
-
-        $newest = $this->newestReleaseDate($packages);
-
-        return sprintf(
-            '  %s — dropped %d version(s) that are newer than %dh or have no release date: %s (newest released %s)',
+        $lines = [sprintf(
+            '  %s — dropped %d version(s) newer than %dh or without a release date:',
             $name,
             count($packages),
-            $this->config->minHours,
-            implode(', ', $versions),
-            $newest?->format('Y-m-d H:i') ?? 'unknown'
-        );
+            $this->config->minHours
+        )];
+
+        foreach ($packages as $package) {
+            $lines[] = sprintf('    %s  [%s]', $package->getPrettyVersion(), $this->describeReleaseTime($package));
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function describeReleaseTime(PackageInterface $package): string
+    {
+        $releaseTime = $this->publishedTime->releaseTime($package);
+
+        return match ($releaseTime->source) {
+            ReleaseTimeSource::Published => 'published-time '.$releaseTime->date->format('Y-m-d H:i').', server-stamped',
+            ReleaseTimeSource::Committer => 'time '.$releaseTime->date->format('Y-m-d H:i').', self-reported (backdatable)',
+            ReleaseTimeSource::None => 'no release date',
+        };
+    }
+
+    /**
+     * Summarize which clock each dropped version was judged by. `time` is
+     * self-reported and backdatable; the count of versions that fell back to it
+     * (because Packagist served no `published-time`) is the residual surface a
+     * backdating attacker could still aim at, so it is reported even without -v.
+     */
+    private function describeSourceBreakdown(FilterResult $result): string
+    {
+        $published = 0;
+        $committer = 0;
+        $none = 0;
+
+        foreach ($result->droppedByName as $packages) {
+            foreach ($packages as $package) {
+                match ($this->publishedTime->releaseTime($package)->source) {
+                    ReleaseTimeSource::Published => $published++,
+                    ReleaseTimeSource::Committer => $committer++,
+                    ReleaseTimeSource::None => $none++,
+                };
+            }
+        }
+
+        $parts = [
+            sprintf('%d by server-stamped publish time', $published),
+            sprintf('%d by self-reported time%s', $committer, $committer > 0 ? ' (backdatable)' : ''),
+        ];
+
+        if ($none > 0) {
+            $parts[] = sprintf('%d with no release date', $none);
+        }
+
+        return '<info>[Soak Time]   Judged: '.implode(', ', $parts).'.</info>';
     }
 
     /**
@@ -471,7 +515,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $newest = null;
 
         foreach ($packages as $package) {
-            $releaseDate = $this->publishedTime->resolve($package) ?? $package->getReleaseDate();
+            $releaseDate = $this->publishedTime->releaseTime($package)->date;
 
             if ($releaseDate !== null && ($newest === null || $releaseDate > $newest)) {
                 $newest = $releaseDate;

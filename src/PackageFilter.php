@@ -52,7 +52,7 @@ final class PackageFilter
                 continue;
             }
 
-            $releaseDate = $this->publishedTime->resolve($package) ?? $package->getReleaseDate();
+            $releaseDate = $this->publishedTime->releaseTime($package)->date;
 
             if ($releaseDate === null || $releaseDate > $threshold) {
                 $droppedByName[$package->getName()][] = $package;
