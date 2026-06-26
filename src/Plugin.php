@@ -34,12 +34,16 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private PublishedTimeResolver $publishedTime;
 
+    /** @var array<string, true> Versions already pinned in composer.lock, keyed by PackageFilter::lockedKey(). */
+    private array $lockedVersions = [];
+
     public function activate(Composer $composer, IOInterface $io): void
     {
         $this->io = $io;
         $this->config = $this->resolveConfig($composer->getPackage()->getExtra());
         $this->lockFile = IntegrityLockFile::load($this->resolveLockPath());
         $this->publishedTime = new PublishedTimeResolver();
+        $this->lockedVersions = $this->loadLockedVersions($composer);
     }
 
     public function deactivate(Composer $composer, IOInterface $io): void {}
@@ -84,7 +88,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $result = (new PackageFilter($this->publishedTime))->filter(
             $event->getPackages(),
             $threshold,
-            $this->config->whitelist
+            $this->config->whitelist,
+            $this->lockedVersions
         );
 
         $this->report($result);
@@ -125,6 +130,30 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $this->lockFile->save();
+    }
+
+    /**
+     * Snapshot the versions already pinned in composer.lock so the soak filter
+     * can exempt them. Empty when there is no lock yet (a first install/require
+     * resolves fresh and is gated normally).
+     *
+     * @return array<string, true>
+     */
+    private function loadLockedVersions(Composer $composer): array
+    {
+        $locker = $composer->getLocker();
+
+        if (! $locker->isLocked()) {
+            return [];
+        }
+
+        $locked = [];
+
+        foreach ($locker->getLockedRepository(true)->getPackages() as $package) {
+            $locked[PackageFilter::lockedKey($package)] = true;
+        }
+
+        return $locked;
     }
 
     private function resolveLockPath(): string

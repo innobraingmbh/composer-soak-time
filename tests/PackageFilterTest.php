@@ -112,6 +112,56 @@ final class PackageFilterTest extends TestCase
     }
 
     #[Test]
+    public function it_keeps_a_locked_version_even_when_fresh(): void
+    {
+        $package = $this->package('vendor/onoffice', '2.0.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [PackageFilter::lockedKey($package) => true]
+        );
+
+        $this->assertSame([$package], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_keeps_a_locked_version_with_no_release_date(): void
+    {
+        $package = $this->package('vendor/onoffice', '2.0.0', null);
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [PackageFilter::lockedKey($package) => true]
+        );
+
+        $this->assertSame([$package], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_still_drops_a_fresh_version_that_differs_from_the_locked_one(): void
+    {
+        $locked = $this->package('vendor/onoffice', '1.0.0', '-1 hour');
+        $bump = $this->package('vendor/onoffice', '2.0.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$locked, $bump],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [PackageFilter::lockedKey($locked) => true]
+        );
+
+        $this->assertSame([$locked], $result->keptPackages);
+        $this->assertSame(1, $result->droppedCount());
+        $this->assertSame([$bump], $result->droppedByName['vendor/onoffice']);
+    }
+
+    #[Test]
     public function it_keeps_packages_matching_a_vendor_wildcard(): void
     {
         $package = $this->package('acme/foo', '1.0.0', '-1 hour');

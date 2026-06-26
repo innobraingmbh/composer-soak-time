@@ -13,7 +13,7 @@ Four checks run on every install/update:
 
 | Check | Hook | Catches |
 |---|---|---|
-| **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases — drops versions younger than the soak time from the solver pool. |
+| **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases — drops versions younger than the soak time from the solver pool. Versions already pinned in `composer.lock` are exempt. |
 | **Reference drift** (`ReferenceDriftCheck`) | `PRE_POOL_CREATE` | Altered historical releases — a backdated `GIT_COMMITTER_DATE` still changes the content-addressed SHA, which can't be forged. |
 | **Hash pinning** (`HashVerifier`) | `POST_FILE_DOWNLOAD` | Cache poisoning at `~/.composer/cache/files/` — re-hashes the downloaded archive (Composer's native sha1 is empty for GitHub zips). |
 | **Source pinning** (`PackageIntegrityRecorder`) | `POST_PACKAGE_INSTALL` / `POST_PACKAGE_UPDATE` | `--prefer-source` installs; fails closed if a dist install never exposes its archive. |
@@ -46,6 +46,7 @@ Default soak time is **168h (7 days)**. Configure via `extra` in `composer.json`
 - **Per-run override:** `SOAK_TIME_HOURS=336 composer update` (takes precedence; ignored with a warning if not a non-negative integer).
 - **Whitelist** bypasses the soak filter for trusted packages that update constantly. `*` is allowed in the **name** half only — the vendor must be a literal (`your-company/*`, `your-company/lib-*`). Vendor-side wildcards (`*/x`, `*/*`, `*`) are rejected. `SOAK_TIME_SKIP` accepts the same patterns.
 - Versions with no release date are filtered unless whitelisted. Whitelist path/internal repos only if you trust their metadata.
+- **Already-locked versions are exempt.** The soak window gates *adopting* a fresh version during resolution; a version already pinned in `composer.lock` was adopted earlier, so it passes through. This keeps `composer install` deterministic and stops a partial update (`composer require x`) from failing on an unrelated, freshly-published dependency you already have locked. Adopting a *new* or bumped version still gets gated; the artifact itself is still guarded by the integrity checks.
 
 Windows PowerShell sets env vars as `$env:SOAK_TIME_HOURS=336; composer update`.
 

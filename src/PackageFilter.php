@@ -25,11 +25,23 @@ final class PackageFilter
      * Drop every package version published after the given threshold. Versions
      * with no known release date are also dropped unless explicitly whitelisted.
      *
+     * Versions already pinned in composer.lock are exempt: the soak window
+     * gates *adopting* a fresh version during resolution, and an already-locked
+     * version was adopted earlier. Re-gating it would needlessly break partial
+     * updates (`composer require x` failing on an unrelated fresh-but-locked
+     * dependency) and `composer install`, without adding protection the
+     * integrity checks do not already provide.
+     *
      * @param  iterable<PackageInterface>  $packages
      * @param  list<string>  $whitelist
+     * @param  array<string, true>  $lockedVersions  keyed by self::lockedKey()
      */
-    public function filter(iterable $packages, \DateTimeInterface $threshold, array $whitelist): FilterResult
-    {
+    public function filter(
+        iterable $packages,
+        \DateTimeInterface $threshold,
+        array $whitelist,
+        array $lockedVersions = [],
+    ): FilterResult {
         $kept = [];
         $droppedByName = [];
 
@@ -52,6 +64,12 @@ final class PackageFilter
                 continue;
             }
 
+            if (isset($lockedVersions[self::lockedKey($package)])) {
+                $kept[] = $package;
+
+                continue;
+            }
+
             $releaseDate = $this->publishedTime->releaseTime($package)->date;
 
             if ($releaseDate === null || $releaseDate > $threshold) {
@@ -64,6 +82,15 @@ final class PackageFilter
         }
 
         return new FilterResult($kept, $droppedByName);
+    }
+
+    /**
+     * Identity key for the locked-version exemption. Normalized version, so the
+     * exemption is exact: a locked 1.0.0 does not exempt a fresh 2.0.0.
+     */
+    public static function lockedKey(PackageInterface $package): string
+    {
+        return $package->getName().'@'.$package->getVersion();
     }
 
     /**
