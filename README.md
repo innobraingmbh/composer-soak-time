@@ -50,6 +50,25 @@ Default soak time is **168h (7 days)**. Configure via `extra` in `composer.json`
 
 Windows PowerShell sets env vars as `$env:SOAK_TIME_HOURS=336; composer update`.
 
+### Security-fix window (`soak-time-security-hours`)
+
+When the version you have **locked** is affected by a published security advisory, waiting out the full soak window means running known-vulnerable code for a week. The scoped security override shortens the wait for exactly the versions that fix it: a version younger than the soak window is still admitted if it
+
+1. has aged past the **security window** (default **72h**), and
+2. clears **every** advisory affecting the locked version of that package (per the same registry advisory data `composer audit` uses).
+
+```json
+{
+    "extra": {
+        "soak-time-security-hours": 72
+    }
+}
+```
+
+Per-run override: `SOAK_TIME_SECURITY_HOURS=48 composer update`. Set it to a value ≥ `soak-time-hours` to disable the override entirely (no advisory lookups are made then).
+
+This codifies the "temporarily run with `SOAK_TIME_HOURS=72`" routine with a much smaller attack surface: the shorter window applies per package, only while your locked version is known-vulnerable, and the admitted fix still has to soak. Every admission is reported loudly with the advisory IDs that justified it. Advisory lookups happen lazily — only for a locked package whose fresh version would otherwise be dropped — and a failed lookup falls back to the full soak window. See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the residual risks.
+
 ### Dev branches (`soak-time-dev-branches`)
 
 Dev versions like `dev-main` or `1.x-dev` are **mutable** — their `sourceReference` (git SHA) legitimately changes every time the branch advances. By default the plugin treats every version as immutable and hard-fails if a pinned reference drifts. That would make `composer update` permanently broken for any dev-branch dependency once the branch advances.
@@ -124,7 +143,7 @@ Some paths (including plugin self-update) install from dist without exposing the
 
 ## 🚨 Emergency skip
 
-Install a fresh security patch by skipping the freshness filter for one package (integrity checks still run):
+Security fixes for advisories affecting your locked versions are admitted automatically after the [security window](#security-fix-window-soak-time-security-hours) (72h by default). For a fix that cannot wait even that long, skip the freshness filter for one package (integrity checks still run):
 
 ```bash
 SOAK_TIME_SKIP=vendor/package composer update vendor/package

@@ -32,6 +32,11 @@ final class PackageFilter
      * dependency) and `composer install`, without adding protection the
      * integrity checks do not already provide.
      *
+     * When a security gate is given, a version that misses the threshold gets
+     * one more chance: it is kept if it has aged past the gate's shorter
+     * security window and clears every advisory affecting the locked version
+     * of its package (see SecurityFixGate).
+     *
      * @param  iterable<PackageInterface>  $packages
      * @param  list<string>  $whitelist
      * @param  array<string, true>  $lockedVersions  keyed by self::lockedKey()
@@ -41,9 +46,11 @@ final class PackageFilter
         \DateTimeInterface $threshold,
         array $whitelist,
         array $lockedVersions = [],
+        ?SecurityFixGate $securityGate = null,
     ): FilterResult {
         $kept = [];
         $droppedByName = [];
+        $securityAdmittedByName = [];
 
         foreach ($packages as $package) {
             if ($package instanceof RootPackageInterface) {
@@ -73,6 +80,13 @@ final class PackageFilter
             $releaseDate = $this->publishedTime->releaseTime($package)->date;
 
             if ($releaseDate === null || $releaseDate > $threshold) {
+                if ($securityGate !== null && $securityGate->admits($package, $releaseDate)) {
+                    $kept[] = $package;
+                    $securityAdmittedByName[$package->getName()][] = $package;
+
+                    continue;
+                }
+
                 $droppedByName[$package->getName()][] = $package;
 
                 continue;
@@ -81,7 +95,7 @@ final class PackageFilter
             $kept[] = $package;
         }
 
-        return new FilterResult($kept, $droppedByName);
+        return new FilterResult($kept, $droppedByName, $securityAdmittedByName);
     }
 
     /**

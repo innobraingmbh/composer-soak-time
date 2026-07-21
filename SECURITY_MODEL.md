@@ -16,6 +16,27 @@ Two layers enforce this: recent versions are dropped from the solver pool, and i
 - Source installs are pinned by source reference and URL; dist downloads by archive sha256 when Composer exposes it. A dist install that hides its archive fails closed — reinstall with `--prefer-source`.
 - `SOAK_TIME_SKIP` bypasses only freshness; integrity checks still run.
 
+## Security-Fix Window
+
+Soaking cuts both ways: when the locked version of a package is affected by a published security advisory, the full soak window forces the project to keep running known-vulnerable code until the fix ages past it. The historical workaround — rerunning with a globally lowered `SOAK_TIME_HOURS` — shrinks the window for *every* package at once. The security-fix window codifies that dance with a much smaller surface.
+
+A version younger than the soak window is admitted anyway when both hold:
+
+- It has aged past the shorter security window (`soak-time-security-hours` / `SOAK_TIME_SECURITY_HOURS`, default 72h; any value ≥ the soak window disables the override and suppresses all advisory lookups).
+- Registry advisory data — the same server-side source `composer audit` reads, queried live from repositories that provide it — shows at least one advisory affecting the locked version of that package, and the candidate version escapes **every** advisory affecting the locked version.
+
+Design properties:
+
+- The relaxation is scoped per package and conditional: it exists only while the locked version is known-vulnerable, and the admitted version still soaks for the security window.
+- Advisory data is registry-side metadata, not part of the release an attacker publishes. It cannot be backdated or forged inside the package; influencing it requires getting an advisory published against the victim's locked version, which is loud (GitHub advisories, CVE assignment, downstream scanner alerts).
+- Lookups are lazy (one query per package name, only when a fresh version of a locked package would otherwise be dropped) and fail closed: if the advisory API is unreachable, the full soak window applies.
+- Every admission is reported as a warning naming the version and the advisory IDs that justified it.
+
+Residual risks, accepted deliberately:
+
+- "Escapes the advisory's affected range" is a weaker claim than "is the security fix". If the locked version has *any* outstanding advisory, a brand-new unrelated version (e.g. a fresh major) also escapes the affected range and qualifies for the shorter window. A compromised maintainer could likewise publish a bogus advisory against existing versions and a "fixed" malicious release. In both cases the malicious version must still soak for the security window, is subject to all integrity checks, and the admission is loudly reported — against the alternative this replaces (a global window reduction), the exposure is strictly smaller.
+- The advisory feed is trusted as an input that can only *shorten* the window from the soak default to the security default, never below the configured security window and never for packages without an advisory against the locked version.
+
 ## Dev Branches (Mutable Versions)
 
 Stable versions are immutable: Packagist refuses to move a tag after it is indexed, and the plugin hard-fails on any drift from the recorded reference, URL, or archive hash.

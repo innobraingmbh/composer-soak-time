@@ -2,10 +2,13 @@
 
 namespace Innobrain\SoakTime\Tests;
 
+use Composer\Advisory\PartialSecurityAdvisory;
 use Composer\Package\Package;
 use Composer\Package\PackageInterface;
 use Composer\Package\RootPackage;
+use Composer\Semver\VersionParser;
 use Innobrain\SoakTime\PackageFilter;
+use Innobrain\SoakTime\SecurityFixGate;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -307,6 +310,76 @@ final class PackageFilterTest extends TestCase
         $this->assertCount(2, $result->droppedByName['vendor/a']);
         $this->assertCount(1, $result->droppedByName['vendor/b']);
         $this->assertSame(3, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_keeps_a_fresh_version_admitted_by_the_security_gate(): void
+    {
+        $locked = $this->package('vendor/vulnerable', '2.0.0', '-30 days');
+        $fix = $this->package('vendor/vulnerable', '2.1.0', '-100 hours');
+
+        $result = (new PackageFilter())->filter(
+            [$locked, $fix],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [PackageFilter::lockedKey($locked) => true],
+            $this->securityGate('vendor/vulnerable', '<2.1.0', ['2.0.0.0'])
+        );
+
+        $this->assertSame([$locked, $fix], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
+        $this->assertSame([$fix], $result->securityAdmittedByName['vendor/vulnerable']);
+    }
+
+    #[Test]
+    public function it_still_drops_a_fresh_version_the_security_gate_rejects(): void
+    {
+        $locked = $this->package('vendor/vulnerable', '2.0.0', '-30 days');
+        $tooFresh = $this->package('vendor/vulnerable', '2.1.0', '-1 hour');
+
+        $result = (new PackageFilter())->filter(
+            [$locked, $tooFresh],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [PackageFilter::lockedKey($locked) => true],
+            $this->securityGate('vendor/vulnerable', '<2.1.0', ['2.0.0.0'])
+        );
+
+        $this->assertSame([$locked], $result->keptPackages);
+        $this->assertSame([$tooFresh], $result->droppedByName['vendor/vulnerable']);
+        $this->assertSame([], $result->securityAdmittedByName);
+    }
+
+    #[Test]
+    public function it_does_not_consult_the_security_gate_for_versions_past_the_soak_window(): void
+    {
+        $mature = $this->package('vendor/healthy', '1.0.0', '-30 days');
+
+        $result = (new PackageFilter())->filter(
+            [$mature],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [],
+            $this->securityGate('vendor/healthy', '<1.0.0', ['0.9.0.0'])
+        );
+
+        $this->assertSame([$mature], $result->keptPackages);
+        $this->assertSame([], $result->securityAdmittedByName);
+    }
+
+    private function securityGate(string $name, string $affectedVersions, array $lockedVersions): SecurityFixGate
+    {
+        $advisory = new PartialSecurityAdvisory(
+            $name,
+            'CVE-2026-0001',
+            (new VersionParser())->parseConstraints($affectedVersions)
+        );
+
+        return new SecurityFixGate(
+            new \DateTimeImmutable('-72 hours'),
+            [new FakeAdvisoryRepository([$name => [$advisory]])],
+            [$name => $lockedVersions]
+        );
     }
 
     private function package(string $name, string $version, ?string $releasedAgo): PackageInterface

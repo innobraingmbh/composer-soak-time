@@ -9,10 +9,12 @@ final class FilterResult
     /**
      * @param  list<PackageInterface>  $keptPackages
      * @param  array<string, list<PackageInterface>>  $droppedByName
+     * @param  array<string, list<PackageInterface>>  $securityAdmittedByName  Versions younger than the soak window kept via the security-fix window because they clear an advisory affecting the locked version.
      */
     public function __construct(
         public readonly array $keptPackages,
         public readonly array $droppedByName,
+        public readonly array $securityAdmittedByName = [],
     ) {}
 
     public function droppedCount(): int

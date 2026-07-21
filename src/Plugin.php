@@ -23,6 +23,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 {
     private const DEFAULT_MIN_HOURS = 168;
 
+    private const DEFAULT_SECURITY_HOURS = 72;
+
     /** Always whitelist self to prevent locking the plugin out of its own updates. */
     private const SELF = 'innobrain/soak-time';
 
@@ -37,13 +39,16 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     /** @var array<string, true> Versions already pinned in composer.lock, keyed by PackageFilter::lockedKey(). */
     private array $lockedVersions = [];
 
+    /** @var array<string, list<string>> Normalized locked versions keyed by package name, for the security-fix override. */
+    private array $lockedVersionsByName = [];
+
     public function activate(Composer $composer, IOInterface $io): void
     {
         $this->io = $io;
         $this->config = $this->resolveConfig($composer->getPackage()->getExtra());
         $this->lockFile = IntegrityLockFile::load($this->resolveLockPath());
         $this->publishedTime = new PublishedTimeResolver();
-        $this->lockedVersions = $this->loadLockedVersions($composer);
+        $this->loadLockedVersions($composer);
     }
 
     public function deactivate(Composer $composer, IOInterface $io): void {}
@@ -84,17 +89,37 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         ));
 
         $threshold = (new \DateTimeImmutable())->modify("-{$this->config->minHours} hours");
+        $securityGate = $this->securityGate($event);
 
         $result = (new PackageFilter($this->publishedTime))->filter(
             $event->getPackages(),
             $threshold,
             $this->config->whitelist,
-            $this->lockedVersions
+            $this->lockedVersions,
+            $securityGate
         );
 
-        $this->report($result);
+        $this->report($result, $securityGate);
 
         $event->setPackages($result->keptPackages);
+    }
+
+    /**
+     * The security-fix override only matters when its window is shorter than
+     * the soak window and there are locked versions to compare advisories
+     * against; otherwise return null so no advisory lookups can ever happen.
+     */
+    private function securityGate(PrePoolCreateEvent $event): ?SecurityFixGate
+    {
+        if ($this->config->securityHours >= $this->config->minHours || $this->lockedVersionsByName === []) {
+            return null;
+        }
+
+        return new SecurityFixGate(
+            (new \DateTimeImmutable())->modify("-{$this->config->securityHours} hours"),
+            $event->getRepositories(),
+            $this->lockedVersionsByName,
+        );
     }
 
     public function onPostFileDownload(PostFileDownloadEvent $event): void
@@ -134,26 +159,22 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     /**
      * Snapshot the versions already pinned in composer.lock so the soak filter
-     * can exempt them. Empty when there is no lock yet (a first install/require
+     * can exempt them and the security-fix override can match advisories
+     * against them. Empty when there is no lock yet (a first install/require
      * resolves fresh and is gated normally).
-     *
-     * @return array<string, true>
      */
-    private function loadLockedVersions(Composer $composer): array
+    private function loadLockedVersions(Composer $composer): void
     {
         $locker = $composer->getLocker();
 
         if (! $locker->isLocked()) {
-            return [];
+            return;
         }
-
-        $locked = [];
 
         foreach ($locker->getLockedRepository(true)->getPackages() as $package) {
-            $locked[PackageFilter::lockedKey($package)] = true;
+            $this->lockedVersions[PackageFilter::lockedKey($package)] = true;
+            $this->lockedVersionsByName[$package->getName()][] = $package->getVersion();
         }
-
-        return $locked;
     }
 
     private function resolveLockPath(): string
@@ -225,6 +246,39 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $this->io->writeError(
                 '<warning>[Soak Time] Soak time is 0h — no package filtering will be applied.</warning>'
             );
+        }
+
+        $securityHours = self::DEFAULT_SECURITY_HOURS;
+
+        if (array_key_exists('soak-time-security-hours', $extra)) {
+            $parsed = SoakTimeConfig::parseHours($extra['soak-time-security-hours']);
+
+            if ($parsed === null) {
+                $this->io->writeError(sprintf(
+                    '<warning>[Soak Time] Ignoring invalid "soak-time-security-hours" in composer.json — '
+                    .'expected a non-negative integer. Using %dh.</warning>',
+                    $securityHours
+                ));
+            } else {
+                $securityHours = $parsed;
+            }
+        }
+
+        $envSecurityHours = getenv('SOAK_TIME_SECURITY_HOURS');
+
+        if ($envSecurityHours !== false && $envSecurityHours !== '') {
+            $parsed = SoakTimeConfig::parseHours($envSecurityHours);
+
+            if ($parsed === null) {
+                $this->io->writeError(sprintf(
+                    '<warning>[Soak Time] Ignoring invalid SOAK_TIME_SECURITY_HOURS value "%s" — '
+                    .'expected a non-negative integer. Using %dh.</warning>',
+                    $envSecurityHours,
+                    $securityHours
+                ));
+            } else {
+                $securityHours = $parsed;
+            }
         }
 
         $whitelist = [self::SELF];
@@ -412,11 +466,14 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $integrityLockPath,
             $devBranches,
             $integrityIgnore,
+            $securityHours,
         );
     }
 
-    private function report(FilterResult $result): void
+    private function report(FilterResult $result, ?SecurityFixGate $securityGate): void
     {
+        $this->reportSecurityAdmitted($result, $securityGate);
+
         $droppedCount = $result->droppedCount();
 
         if ($droppedCount === 0) {
@@ -440,6 +497,37 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
         foreach ($result->fullyDroppedNames() as $name) {
             $this->warnFullyDropped($name, $result->droppedByName[$name]);
+        }
+    }
+
+    /**
+     * The security-fix override is a deliberate relaxation, so every version
+     * it admits is reported loudly with the advisories that justified it.
+     */
+    private function reportSecurityAdmitted(FilterResult $result, ?SecurityFixGate $securityGate): void
+    {
+        if ($securityGate === null) {
+            return;
+        }
+
+        foreach ($result->securityAdmittedByName as $name => $packages) {
+            $advisoryIds = array_map(
+                static fn ($advisory) => $advisory->advisoryId,
+                $securityGate->advisoriesAffectingLocked($name)
+            );
+
+            foreach ($packages as $package) {
+                $this->io->writeError(sprintf(
+                    '<warning>[Soak Time] Security override: kept "%s" %s (%s) within the %dh security window '
+                    .'instead of the full %dh soak — it clears %s affecting the locked version.</warning>',
+                    $name,
+                    $package->getPrettyVersion(),
+                    $this->describeReleaseTime($package),
+                    $this->config->securityHours,
+                    $this->config->minHours,
+                    implode(', ', $advisoryIds)
+                ));
+            }
         }
     }
 
