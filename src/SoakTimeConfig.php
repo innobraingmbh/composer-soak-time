@@ -10,6 +10,7 @@ final class SoakTimeConfig
      * @param  list<string>  $devBranches  Package-name patterns whose dev versions are treated as mutable.
      * @param  list<string>  $integrityIgnore  Package-name patterns exempted from integrity checks entirely.
      * @param  int  $securityHours  Shorter soak window for versions that clear an advisory affecting the locked version; values >= $minHours disable the override.
+     * @param  array<string, int>  $packageHours  Per-package soak windows keyed by package-name pattern; first match replaces $minHours.
      */
     public function __construct(
         public readonly int $minHours,
@@ -20,6 +21,7 @@ final class SoakTimeConfig
         public readonly array $devBranches = [],
         public readonly array $integrityIgnore = [],
         public readonly int $securityHours = 72,
+        public readonly array $packageHours = [],
     ) {}
 
     /**

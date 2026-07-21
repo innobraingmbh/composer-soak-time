@@ -367,6 +367,99 @@ final class PackageFilterTest extends TestCase
         $this->assertSame([], $result->securityAdmittedByName);
     }
 
+    #[Test]
+    public function it_keeps_a_fresh_version_within_its_per_package_threshold(): void
+    {
+        $fresh = $this->package('vendor/urgent', '2.0.0', '-30 hours');
+        $other = $this->package('vendor/other', '1.0.0', '-30 hours');
+
+        $result = (new PackageFilter())->filter(
+            [$fresh, $other],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [],
+            null,
+            ['vendor/urgent' => new \DateTimeImmutable('-24 hours')]
+        );
+
+        $this->assertSame([$fresh], $result->keptPackages);
+        $this->assertSame([$other], $result->droppedByName['vendor/other']);
+    }
+
+    #[Test]
+    public function it_drops_a_version_newer_than_its_per_package_threshold(): void
+    {
+        $package = $this->package('vendor/urgent', '2.0.0', '-10 hours');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [],
+            null,
+            ['vendor/urgent' => new \DateTimeImmutable('-24 hours')]
+        );
+
+        $this->assertSame([], $result->keptPackages);
+        $this->assertSame([$package], $result->droppedByName['vendor/urgent']);
+    }
+
+    #[Test]
+    public function a_per_package_threshold_can_also_lengthen_the_soak_window(): void
+    {
+        $package = $this->package('vendor/cautious', '2.0.0', '-200 hours');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [],
+            null,
+            ['vendor/cautious' => new \DateTimeImmutable('-336 hours')]
+        );
+
+        $this->assertSame([], $result->keptPackages);
+        $this->assertSame(1, $result->droppedCount());
+    }
+
+    #[Test]
+    public function per_package_thresholds_match_name_wildcards(): void
+    {
+        $package = $this->package('acme/lib-fresh', '1.0.0', '-30 hours');
+
+        $result = (new PackageFilter())->filter(
+            [$package],
+            new \DateTimeImmutable('-168 hours'),
+            [],
+            [],
+            null,
+            ['acme/*' => new \DateTimeImmutable('-24 hours')]
+        );
+
+        $this->assertSame([$package], $result->keptPackages);
+    }
+
+    #[Test]
+    public function the_first_matching_per_package_threshold_wins(): void
+    {
+        $value = PackageFilter::firstMatch('acme/foo', [
+            'other/*' => 'no',
+            'acme/foo' => 'exact',
+            'acme/*' => 'wildcard',
+        ]);
+
+        $this->assertSame('exact', $value);
+    }
+
+    #[Test]
+    public function invalid_per_package_threshold_patterns_never_match(): void
+    {
+        $this->assertNull(PackageFilter::firstMatch('vendor/anything', [
+            '*' => 'bare',
+            '*/anything' => 'vendor-wildcard',
+        ]));
+    }
+
     private function securityGate(string $name, string $affectedVersions, array $lockedVersions): SecurityFixGate
     {
         $advisory = new PartialSecurityAdvisory(

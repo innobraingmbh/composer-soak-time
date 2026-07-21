@@ -84,19 +84,30 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $this->io->write(sprintf(
-            '<info>[Soak Time] Inspecting packages (minimum age: %dh)...</info>',
-            $this->config->minHours
+            '<info>[Soak Time] Inspecting packages (minimum age: %dh%s)...</info>',
+            $this->config->minHours,
+            $this->config->packageHours === []
+                ? ''
+                : sprintf(', %d per-package override(s)', count($this->config->packageHours))
         ));
 
-        $threshold = (new \DateTimeImmutable())->modify("-{$this->config->minHours} hours");
+        $now = new \DateTimeImmutable();
+        $threshold = $now->modify("-{$this->config->minHours} hours");
         $securityGate = $this->securityGate($event);
+
+        $packageThresholds = [];
+
+        foreach ($this->config->packageHours as $pattern => $hours) {
+            $packageThresholds[$pattern] = $now->modify("-{$hours} hours");
+        }
 
         $result = (new PackageFilter($this->publishedTime))->filter(
             $event->getPackages(),
             $threshold,
             $this->config->whitelist,
             $this->lockedVersions,
-            $securityGate
+            $securityGate,
+            $packageThresholds
         );
 
         $this->report($result, $securityGate);
@@ -279,6 +290,58 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             } else {
                 $securityHours = $parsed;
             }
+        }
+
+        $packageHours = [];
+
+        if (isset($extra['soak-time-package-hours']) && is_array($extra['soak-time-package-hours'])) {
+            foreach ($extra['soak-time-package-hours'] as $pattern => $rawHours) {
+                $hours = SoakTimeConfig::parseHours($rawHours);
+
+                if (! is_string($pattern) || ! PackageFilter::isValidWhitelistPattern($pattern) || $hours === null) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid extra.soak-time-package-hours entry "%s" — expected a "vendor/name": hours pair with a literal vendor (wildcards only in the name half) and a non-negative integer.</warning>',
+                        is_string($pattern) ? $pattern : get_debug_type($pattern)
+                    ));
+
+                    continue;
+                }
+
+                $packageHours[$pattern] = $hours;
+            }
+        }
+
+        $envPackageHours = getenv('SOAK_TIME_PACKAGE_HOURS');
+
+        if ($envPackageHours !== false && trim($envPackageHours) !== '') {
+            $fromEnv = [];
+
+            foreach (explode(',', $envPackageHours) as $entry) {
+                $entry = trim($entry);
+
+                if ($entry === '') {
+                    continue;
+                }
+
+                $parts = explode(':', $entry);
+                $pattern = strtolower(trim($parts[0]));
+                $hours = count($parts) === 2 ? SoakTimeConfig::parseHours(trim($parts[1])) : null;
+
+                if (! PackageFilter::isValidWhitelistPattern($pattern) || $hours === null) {
+                    $this->io->writeError(sprintf(
+                        '<warning>[Soak Time] Ignoring invalid SOAK_TIME_PACKAGE_HOURS entry "%s" — expected "vendor/name:hours" with a literal vendor (wildcards only in the name half) and a non-negative integer.</warning>',
+                        $entry
+                    ));
+
+                    continue;
+                }
+
+                $fromEnv[$pattern] = $hours;
+            }
+
+            // Env entries take precedence: they win on identical patterns and
+            // are matched first when several patterns cover the same package.
+            $packageHours = $fromEnv + $packageHours;
         }
 
         $whitelist = [self::SELF];
@@ -467,6 +530,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $devBranches,
             $integrityIgnore,
             $securityHours,
+            $packageHours,
         );
     }
 
@@ -540,7 +604,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             '  %s — dropped %d version(s) newer than %dh or without a release date:',
             $name,
             count($packages),
-            $this->config->minHours
+            $this->hoursFor($name)
         )];
 
         foreach ($packages as $package) {
@@ -595,6 +659,12 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         return '<info>[Soak Time]   Judged: '.implode(', ', $parts).'.</info>';
     }
 
+    /** The soak window that actually applied to the package, for reporting. */
+    private function hoursFor(string $name): int
+    {
+        return PackageFilter::firstMatch($name, $this->config->packageHours) ?? $this->config->minHours;
+    }
+
     /**
      * @param  list<PackageInterface>  $packages
      */
@@ -615,10 +685,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
                     .'(newest is only %dh old; soak time is %dh).</warning>',
                     $name,
                     $ageHours,
-                    $this->config->minHours
+                    $this->hoursFor($name)
                 ),
             '<warning>            If Composer now fails to resolve dependencies, this is the likely cause. Options:</warning>',
-            sprintf('<warning>              - Lower the soak time:  SOAK_TIME_HOURS=%d composer update</warning>', $ageHours ?? 0),
+            sprintf('<warning>              - Lower its soak time:  SOAK_TIME_PACKAGE_HOURS=%s:%d composer update</warning>', $name, $ageHours ?? 0),
+            sprintf('<warning>              - Lower all soak times: SOAK_TIME_HOURS=%d composer update</warning>', $ageHours ?? 0),
             sprintf('<warning>              - Whitelist it:         add "%s" to extra.soak-time-whitelist</warning>', $name),
             sprintf('<warning>              - One-run skip:        SOAK_TIME_SKIP=%s composer update</warning>', $name),
         ]);

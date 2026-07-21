@@ -50,6 +50,30 @@ Default soak time is **168h (7 days)**. Configure via `extra` in `composer.json`
 
 Windows PowerShell sets env vars as `$env:SOAK_TIME_HOURS=336; composer update`.
 
+### Per-package soak time (`soak-time-package-hours`)
+
+Give individual packages their own soak window — shorter for dependencies you need to track closely, longer for ones you want extra caution on — without touching the global one:
+
+```json
+{
+    "extra": {
+        "soak-time-package-hours": {
+            "guzzlehttp/guzzle": 72,
+            "your-company/*": 24,
+            "some-vendor/risky-lib": 336
+        }
+    }
+}
+```
+
+Per-run override as comma-separated `pattern:hours` pairs:
+
+```bash
+SOAK_TIME_PACKAGE_HOURS=guzzlehttp/guzzle:72 composer update guzzlehttp/guzzle
+```
+
+Patterns follow the whitelist rules (literal vendor, `*` only in the name half); the first matching entry wins, and env entries beat `composer.json` ones. This is the scoped alternative to lowering `SOAK_TIME_HOURS` globally: every other package keeps the full window. Versions with no release date are still dropped — use the whitelist for full bypass.
+
 ### Security-fix window (`soak-time-security-hours`)
 
 When the version you have **locked** is affected by a published security advisory, waiting out the full soak window means running known-vulnerable code for a week. The scoped security override shortens the wait for exactly the versions that fix it: a version younger than the soak window is still admitted if it
@@ -153,7 +177,7 @@ SOAK_TIME_SKIP=vendor/package composer update vendor/package
 
 ## 🔍 Troubleshooting
 
-Run `composer update -v` to see dropped versions. If the soak time hides **every** version of a required package, resolution fails — the plugin names the package and its newest version's age up front. Fix by lowering `SOAK_TIME_HOURS`, whitelisting it, or a one-run `SOAK_TIME_SKIP`.
+Run `composer update -v` to see dropped versions. If the soak time hides **every** version of a required package, resolution fails — the plugin names the package and its newest version's age up front. Fix with a scoped `SOAK_TIME_PACKAGE_HOURS=vendor/package:X` (preferred), a global `SOAK_TIME_HOURS=X`, whitelisting it, or a one-run `SOAK_TIME_SKIP`.
 
 ## 🙏 Credits & License
 

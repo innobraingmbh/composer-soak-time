@@ -37,9 +37,15 @@ final class PackageFilter
      * security window and clears every advisory affecting the locked version
      * of its package (see SecurityFixGate).
      *
+     * Per-package thresholds replace the default threshold for packages
+     * matching their pattern (whitelist pattern rules; first match wins), so a
+     * single package's soak window can be shortened or lengthened without
+     * touching the global one.
+     *
      * @param  iterable<PackageInterface>  $packages
      * @param  list<string>  $whitelist
      * @param  array<string, true>  $lockedVersions  keyed by self::lockedKey()
+     * @param  array<string, \DateTimeInterface>  $packageThresholds  keyed by package-name pattern
      */
     public function filter(
         iterable $packages,
@@ -47,6 +53,7 @@ final class PackageFilter
         array $whitelist,
         array $lockedVersions = [],
         ?SecurityFixGate $securityGate = null,
+        array $packageThresholds = [],
     ): FilterResult {
         $kept = [];
         $droppedByName = [];
@@ -78,8 +85,9 @@ final class PackageFilter
             }
 
             $releaseDate = $this->publishedTime->releaseTime($package)->date;
+            $effectiveThreshold = self::firstMatch($package->getName(), $packageThresholds) ?? $threshold;
 
-            if ($releaseDate === null || $releaseDate > $threshold) {
+            if ($releaseDate === null || $releaseDate > $effectiveThreshold) {
                 if ($securityGate !== null && $securityGate->admits($package, $releaseDate)) {
                     $kept[] = $package;
                     $securityAdmittedByName[$package->getName()][] = $package;
@@ -105,6 +113,28 @@ final class PackageFilter
     public static function lockedKey(PackageInterface $package): string
     {
         return $package->getName().'@'.$package->getVersion();
+    }
+
+    /**
+     * Value of the first pattern-keyed entry matching the package name, null
+     * when none matches. Same pattern rules as the whitelist; invalid patterns
+     * are skipped silently here, so callers that surface user-supplied config
+     * should validate up front and warn.
+     *
+     * @template T
+     *
+     * @param  array<string, T>  $byPattern
+     * @return T|null
+     */
+    public static function firstMatch(string $name, array $byPattern): mixed
+    {
+        foreach ($byPattern as $pattern => $value) {
+            if (self::isValidWhitelistPattern($pattern) && fnmatch($pattern, $name)) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     /**
