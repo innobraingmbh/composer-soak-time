@@ -112,7 +112,7 @@ Per-run override: `SOAK_TIME_SECURITY_HOURS=48 composer update`. Set it to a val
 
 This codifies the "temporarily run with `SOAK_TIME_HOURS=72`" routine with a much smaller attack surface: the shorter window applies per package, only while your locked version is known-vulnerable, and the admitted fix still has to soak. Every admission is reported loudly with the advisory IDs that justified it. Advisory lookups happen lazily — only for a locked package whose fresh version would otherwise be dropped — and a failed lookup falls back to the full soak window. See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the residual risks.
 
-On Composer 2.11+ the fix gets an exact-version exemption from Composer's cooldown, which has to exist before Composer starts resolving. So `update`, `require` and `remove` check all locked packages up front, in one advisory query per repository. Composer's cooldown deliberately has no such window; it expects you to run `composer update --no-cooldown vendor/package` yourself.
+On Composer 2.11+ the fix gets an exact-version exemption from Composer's cooldown, which has to exist before Composer starts resolving. So `update`, `require`, `remove` and [`composer fix`](https://github.com/innobraingmbh/composer-fix) check all locked packages up front, in one advisory query per repository. Composer's cooldown deliberately has no such window; it expects you to run `composer update --no-cooldown vendor/package` yourself.
 
 ### Dev branches (`soak-time-dev-branches`)
 
