@@ -213,7 +213,8 @@ class Plugin implements Capable, EventSubscriberInterface, PluginInterface
             }
         }
 
-        if (! $this->cooldownBypassed && in_array($event->getCommandName(), ['update', 'require', 'remove'], true)) {
+        // `fix` is innobrain/composer-fix, which updates without going through Composer's update command.
+        if (! $this->cooldownBypassed && in_array($event->getCommandName(), ['update', 'require', 'remove', 'fix'], true)) {
             $this->exemptSecurityFixes($this->nativeCooldown);
         }
     }
