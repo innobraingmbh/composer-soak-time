@@ -14,12 +14,10 @@ use Composer\Repository\ComposerRepository;
  * server-side and cannot be moved earlier to slip a fresh release past the soak
  * window. Preferring it closes the backdating bypass of the freshness filter.
  *
- * Composer's ArrayLoader drops the field, so it never reaches PackageInterface.
- * But the raw p2 metadata that carries it is written to the repository cache
- * while the pool is built — before the soak filter runs — so we read it back
- * from there. Every failure path returns null so the caller falls back to the
- * package's own release date; this can only ever tighten the filter, never
- * loosen it, and leaves non-Packagist sources untouched.
+ * Composer 2.11+ loads the field onto the package (getPublishedDate()). Older
+ * versions' ArrayLoader drops it, but the raw p2 metadata that carries it is
+ * written to the repository cache while the pool is built — before the soak
+ * filter runs — so we read it back from there.
  */
 final class PublishedTimeResolver
 {
@@ -47,6 +45,10 @@ final class PublishedTimeResolver
 
     public function resolve(PackageInterface $package): ?\DateTimeInterface
     {
+        if (method_exists($package, 'getPublishedDate')) {
+            return $package->getPublishedDate();
+        }
+
         $cache = self::cacheFor($package);
 
         if ($cache === null) {
@@ -63,6 +65,32 @@ final class PublishedTimeResolver
         }
 
         return $this->byProviderFile[$memoKey][$package->getVersion()] ?? null;
+    }
+
+    /**
+     * @throws \RuntimeException
+     */
+    public function assertProvided(PackageInterface $package): void
+    {
+        $repository = $package->getRepository();
+
+        if (! $repository instanceof ComposerRepository || ! method_exists($repository, 'requiresPublishedTime')) {
+            return;
+        }
+
+        if (! $repository->requiresPublishedTime() || $this->resolve($package) !== null) {
+            return;
+        }
+
+        throw new \RuntimeException(sprintf(
+            '[Soak Time] %s %s from %s has no published-time, so the soak filter cannot tell whether it is new or old. '
+            .'Make sure the repository provides publication times (run "composer clear-cache" if it only recently started to), '
+            .'or set "require-published-time": false on that repository to fall back to the package-supplied "time" field, '
+            .'which offers weaker protection.',
+            $package->getPrettyName(),
+            $package->getPrettyVersion(),
+            $repository->getRepoName()
+        ));
     }
 
     /**

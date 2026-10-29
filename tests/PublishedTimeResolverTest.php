@@ -88,8 +88,104 @@ final class PublishedTimeResolverTest extends TestCase
     }
 
     #[Test]
+    public function it_prefers_the_published_time_composer_loads_onto_the_package(): void
+    {
+        $package = new FakePublishedPackage('vendor/name', '2.0.0.0', '2.0.0', new \DateTimeImmutable('2026-05-05T00:00:00+00:00'));
+
+        $this->assertEquals(
+            new \DateTimeImmutable('2026-05-05T00:00:00+00:00'),
+            (new PublishedTimeResolver())->resolve($package)
+        );
+    }
+
+    #[Test]
+    public function it_fails_when_a_composer_repository_serves_no_published_time(): void
+    {
+        $package = new FakePublishedPackage('vendor/name', '2.0.0.0', '2.0.0', null);
+        $package->setRepository($this->fakeRepository(['url' => 'https://repo.example.org']));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('vendor/name 2.0.0 from composer repo (https://repo.example.org) has no published-time');
+
+        (new PublishedTimeResolver())->assertProvided($package);
+    }
+
+    #[Test]
+    public function it_accepts_a_missing_published_time_when_the_repository_opts_out(): void
+    {
+        $package = new FakePublishedPackage('vendor/name', '2.0.0.0', '2.0.0', null);
+        $package->setRepository($this->fakeRepository(['url' => 'https://repo.example.org', 'require-published-time' => false]));
+
+        $this->expectNotToPerformAssertions();
+
+        (new PublishedTimeResolver())->assertProvided($package);
+    }
+
+    #[Test]
+    public function it_accepts_a_composer_repository_version_with_a_published_time(): void
+    {
+        $package = new FakePublishedPackage('vendor/name', '2.0.0.0', '2.0.0', new \DateTimeImmutable('-30 days'));
+        $package->setRepository($this->fakeRepository(['url' => 'https://repo.example.org']));
+
+        $this->expectNotToPerformAssertions();
+
+        (new PublishedTimeResolver())->assertProvided($package);
+    }
+
+    #[Test]
+    public function it_keeps_the_time_fallback_on_composer_versions_without_the_setting(): void
+    {
+        if (method_exists(ComposerRepository::class, 'requiresPublishedTime')) {
+            $this->markTestSkipped('This Composer version knows "require-published-time".');
+        }
+
+        $package = new Package('vendor/name', '2.0.0.0', '2.0.0');
+        $package->setRepository($this->repository('https://repo.example.org'));
+
+        $this->expectNotToPerformAssertions();
+
+        (new PublishedTimeResolver())->assertProvided($package);
+    }
+
+    #[Test]
+    public function the_filter_fails_for_a_judged_version_without_published_time(): void
+    {
+        $package = new FakePublishedPackage('vendor/name', '2.0.0.0', '2.0.0', null);
+        $package->setReleaseDate(new \DateTimeImmutable('-400 days'));
+        $package->setRepository($this->fakeRepository(['url' => 'https://repo.example.org']));
+
+        $this->expectException(\RuntimeException::class);
+
+        (new PackageFilter())->filter([$package], new \DateTimeImmutable('-168 hours'), []);
+    }
+
+    #[Test]
+    public function the_filter_does_not_require_published_time_for_exempt_versions(): void
+    {
+        $repository = $this->fakeRepository(['url' => 'https://repo.example.org']);
+        $whitelisted = new FakePublishedPackage('vendor/trusted', '1.0.0.0', '1.0.0', null);
+        $locked = new FakePublishedPackage('vendor/locked', '1.0.0.0', '1.0.0', null);
+        $branch = new FakePublishedPackage('vendor/branch', 'dev-main', 'dev-main', null);
+
+        foreach ([$whitelisted, $locked, $branch] as $package) {
+            $package->setRepository($repository);
+        }
+
+        $result = (new PackageFilter())->filter(
+            [$whitelisted, $locked, $branch],
+            new \DateTimeImmutable('-168 hours'),
+            ['vendor/trusted'],
+            [PackageFilter::lockedKey($locked) => true]
+        );
+
+        $this->assertSame([$whitelisted, $locked, $branch], $result->keptPackages);
+    }
+
+    #[Test]
     public function it_resolves_published_time_from_the_repository_cache(): void
     {
+        $this->requireCacheFallback();
+
         $repository = $this->repository('https://repo.example.org');
         $this->writeProvider($repository, 'provider-vendor~name.json', 'vendor/name', [
             ['version_normalized' => '2.0.0.0', 'published-time' => '2026-03-03T00:00:00+00:00'],
@@ -107,6 +203,8 @@ final class PublishedTimeResolverTest extends TestCase
     #[Test]
     public function it_reads_dev_versions_from_the_dev_provider_file(): void
     {
+        $this->requireCacheFallback();
+
         $repository = $this->repository('https://repo.example.org');
         $this->writeProvider($repository, 'provider-vendor~name~dev.json', 'vendor/name', [
             ['version_normalized' => 'dev-main', 'published-time' => '2026-04-04T00:00:00+00:00'],
@@ -147,6 +245,8 @@ final class PublishedTimeResolverTest extends TestCase
     #[Test]
     public function release_time_reports_the_server_stamped_source_when_published_time_is_present(): void
     {
+        $this->requireCacheFallback();
+
         $repository = $this->repository('https://repo.example.org');
         $this->writeProvider($repository, 'provider-vendor~name.json', 'vendor/name', [
             ['version_normalized' => '2.0.0.0', 'published-time' => '2026-03-03T00:00:00+00:00'],
@@ -189,20 +289,22 @@ final class PublishedTimeResolverTest extends TestCase
     #[Test]
     public function the_filter_drops_a_version_whose_published_time_is_fresh_despite_an_old_time(): void
     {
-        $repository = $this->repository('https://repo.example.org');
-        $this->writeProvider($repository, 'provider-vendor~backdated.json', 'vendor/backdated', [
-            ['version_normalized' => '9.9.9.0', 'published-time' => (new \DateTimeImmutable('-1 hour'))->format(DATE_RFC3339)],
-        ]);
-
         // The package's own release date (Packagist `time`) is backdated to look mature.
-        $package = new Package('vendor/backdated', '9.9.9.0', '9.9.9');
+        $package = new FakePublishedPackage('vendor/backdated', '9.9.9.0', '9.9.9', new \DateTimeImmutable('-1 hour'));
         $package->setReleaseDate(new \DateTimeImmutable('-400 days'));
-        $package->setRepository($repository);
+        $package->setRepository($this->repository('https://repo.example.org'));
 
         $result = (new PackageFilter())->filter([$package], new \DateTimeImmutable('-168 hours'), []);
 
         $this->assertSame([], $result->keptPackages);
         $this->assertArrayHasKey('vendor/backdated', $result->droppedByName);
+    }
+
+    private function requireCacheFallback(): void
+    {
+        if (method_exists(Package::class, 'getPublishedDate')) {
+            $this->markTestSkipped('Composer 2.11+ loads published-time onto packages; the cache is only read on older versions.');
+        }
     }
 
     /**
@@ -225,6 +327,18 @@ final class PublishedTimeResolverTest extends TestCase
             $config,
             new HttpDownloader($io, $config),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $repoConfig
+     */
+    private function fakeRepository(array $repoConfig): FakeComposerRepository
+    {
+        $io = new NullIO();
+        $config = new Config(false);
+        $config->merge(['config' => ['cache-dir' => $this->cacheDir]]);
+
+        return new FakeComposerRepository($repoConfig, $io, $config, new HttpDownloader($io, $config));
     }
 
     /**

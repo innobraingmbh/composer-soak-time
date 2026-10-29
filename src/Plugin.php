@@ -12,6 +12,9 @@ use Composer\IO\IOInterface;
 use Composer\Installer\PackageEvent;
 use Composer\Installer\PackageEvents;
 use Composer\Package\PackageInterface;
+use Composer\Plugin\Capability\CommandProvider as CommandProviderCapability;
+use Composer\Plugin\Capable;
+use Composer\Plugin\CommandEvent;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
 use Composer\Plugin\PostFileDownloadEvent;
@@ -19,14 +22,16 @@ use Composer\Plugin\PrePoolCreateEvent;
 use Composer\Script\ScriptEvents;
 use Composer\Util\Filesystem;
 
-class Plugin implements PluginInterface, EventSubscriberInterface
+class Plugin implements Capable, EventSubscriberInterface, PluginInterface
 {
-    private const DEFAULT_MIN_HOURS = 168;
+    public const DEFAULT_MIN_HOURS = 168;
 
     private const DEFAULT_SECURITY_HOURS = 72;
 
     /** Always whitelist self to prevent locking the plugin out of its own updates. */
     private const SELF = 'innobrain/soak-time';
+
+    private Composer $composer;
 
     private IOInterface $io;
 
@@ -36,6 +41,21 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private PublishedTimeResolver $publishedTime;
 
+    private ?NativeCooldown $nativeCooldown = null;
+
+    private CooldownState $cooldownState = CooldownState::Disabled;
+
+    private bool $periodSupplied = false;
+
+    private bool $hoursConfigured = false;
+
+    private bool $cooldownBypassed = false;
+
+    private ?SecurityFixGate $securityGate = null;
+
+    /** @var list<PackageInterface> */
+    private array $securityExemptions = [];
+
     /** @var array<string, true> Versions already pinned in composer.lock, keyed by PackageFilter::lockedKey(). */
     private array $lockedVersions = [];
 
@@ -44,11 +64,24 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     public function activate(Composer $composer, IOInterface $io): void
     {
+        $extra = $composer->getPackage()->getExtra();
+
+        $this->composer = $composer;
         $this->io = $io;
-        $this->config = $this->resolveConfig($composer->getPackage()->getExtra());
+        $this->config = $this->resolveConfig($extra);
+        $this->hoursConfigured = array_key_exists('soak-time-hours', $extra) || trim((string) getenv('SOAK_TIME_HOURS')) !== '';
         $this->lockFile = IntegrityLockFile::load($this->resolveLockPath());
         $this->publishedTime = new PublishedTimeResolver();
         $this->loadLockedVersions($composer);
+
+        if (NativeCooldown::isAvailable()) {
+            $this->configureNativeCooldown(new NativeCooldown($composer->getConfig()));
+        }
+    }
+
+    public function getCapabilities(): array
+    {
+        return [CommandProviderCapability::class => CommandProvider::class];
     }
 
     public function deactivate(Composer $composer, IOInterface $io): void {}
@@ -58,6 +91,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     public static function getSubscribedEvents(): array
     {
         return [
+            PluginEvents::COMMAND => 'onCommand',
             PluginEvents::PRE_POOL_CREATE => 'onPrePoolCreate',
             PluginEvents::POST_FILE_DOWNLOAD => 'onPostFileDownload',
             PackageEvents::POST_PACKAGE_INSTALL => 'onPostPackageInstallOrUpdate',
@@ -72,6 +106,12 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         if ($this->config->integrity) {
             (new ReferenceDriftCheck($this->lockFile, $this->config->devBranches, $this->config->integrityIgnore))
                 ->verify($event->getPackages());
+        }
+
+        if ($this->nativeCooldown !== null) {
+            $this->filterAlongsideNativeCooldown($event);
+
+            return;
         }
 
         if ($this->config->skipAllSoak) {
@@ -93,7 +133,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
         $now = new \DateTimeImmutable();
         $threshold = $now->modify("-{$this->config->minHours} hours");
-        $securityGate = $this->securityGate($event);
+        $securityGate = $this->soakSecurityGate($event);
 
         $packageThresholds = [];
 
@@ -116,11 +156,224 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     }
 
     /**
+     * Add every locked version as an ignore rule, so a full update never trades
+     * a locked version for an older one.
+     */
+    private function configureNativeCooldown(NativeCooldown $cooldown): void
+    {
+        $this->nativeCooldown = $cooldown;
+        $this->cooldownState = $cooldown->state();
+
+        if ($this->cooldownState === CooldownState::Unconfigured && ! $this->config->skipAllSoak) {
+            $cooldown->supplyPeriod($this->config->minHours);
+            $this->cooldownState = CooldownState::Configured;
+            $this->periodSupplied = true;
+        }
+
+        if ($this->cooldownState !== CooldownState::Configured) {
+            return;
+        }
+
+        $rules = [];
+
+        foreach ($this->config->whitelist as $pattern) {
+            $rules[$pattern][] = ['reason' => 'soak-time: whitelisted'];
+        }
+
+        foreach (array_keys($this->config->packageHours) as $pattern) {
+            $rules[$pattern][] = ['reason' => 'soak-time: judged by its own soak window'];
+        }
+
+        foreach ($this->lockedVersionsByName as $name => $versions) {
+            foreach ($versions as $version) {
+                $rules[$name][] = ['constraint' => '=='.$version, 'reason' => 'soak-time: locked in composer.lock'];
+            }
+        }
+
+        $cooldown->exempt($rules);
+    }
+
+    public function onCommand(CommandEvent $event): void
+    {
+        if ($this->nativeCooldown === null || $this->cooldownState !== CooldownState::Configured) {
+            return;
+        }
+
+        $input = $event->getInput();
+
+        foreach (['no-cooldown', 'no-blocking', 'no-security-blocking'] as $option) {
+            if ($input->hasOption($option) && $input->getOption($option)) {
+                $this->cooldownBypassed = true;
+            }
+        }
+
+        foreach (['COMPOSER_NO_BLOCKING', 'COMPOSER_NO_SECURITY_BLOCKING'] as $variable) {
+            if (in_array(getenv($variable), ['1', 'true', 'on'], true)) {
+                $this->cooldownBypassed = true;
+            }
+        }
+
+        if (! $this->cooldownBypassed && in_array($event->getCommandName(), ['update', 'require', 'remove'], true)) {
+            $this->exemptSecurityFixes($this->nativeCooldown);
+        }
+    }
+
+    /**
+     * The exemption has to exist before Composer reads its policy, so advisories
+     * for all locked packages are fetched here, in one query per repository.
+     */
+    private function exemptSecurityFixes(NativeCooldown $cooldown): void
+    {
+        $periodSeconds = $cooldown->periodSeconds();
+
+        if ($this->lockedVersionsByName === [] || ($periodSeconds !== null && $this->config->securityHours * 3600 >= $periodSeconds)) {
+            return;
+        }
+
+        $now = new \DateTimeImmutable();
+        $repositories = $this->composer->getRepositoryManager()->getRepositories();
+        $this->securityGate = new SecurityFixGate(
+            $now->modify("-{$this->config->securityHours} hours"),
+            $repositories,
+            $this->lockedVersionsByName,
+        );
+        $cooldownStart = $periodSeconds === null ? null : $now->modify("-{$periodSeconds} seconds");
+
+        $rules = [];
+
+        foreach ($this->securityGate->vulnerableNames() as $name) {
+            if ($this->ignoredByNativeCooldown($name)) {
+                continue;
+            }
+
+            $fixes = [];
+
+            foreach ($repositories as $repository) {
+                foreach ($repository->findPackages($name) as $candidate) {
+                    $releaseDate = $this->publishedTime->releaseTime($candidate)->date;
+
+                    if ($candidate->isDev() || $releaseDate === null || ($cooldownStart !== null && $releaseDate <= $cooldownStart)) {
+                        continue;
+                    }
+
+                    if ($this->securityGate->admits($candidate, $releaseDate)) {
+                        $fixes[$candidate->getVersion()] = $candidate;
+                    }
+                }
+            }
+
+            foreach ($fixes as $version => $fix) {
+                $rules[$name][] = ['constraint' => '=='.$version, 'reason' => 'soak-time: security fix past the security window'];
+                $this->securityExemptions[] = $fix;
+            }
+        }
+
+        $cooldown->exempt($rules);
+    }
+
+    private function ignoredByNativeCooldown(string $name): bool
+    {
+        return PackageFilter::matchesWhitelist($name, $this->config->whitelist)
+            || PackageFilter::firstMatch($name, $this->config->packageHours) !== null;
+    }
+
+    private function filterAlongsideNativeCooldown(PrePoolCreateEvent $event): void
+    {
+        $this->announceNativeCooldown();
+
+        if ($this->cooldownState !== CooldownState::Configured || $this->cooldownBypassed || $this->config->packageHours === []) {
+            return;
+        }
+
+        $now = new \DateTimeImmutable();
+        $packageThresholds = [];
+
+        foreach ($this->config->packageHours as $pattern => $hours) {
+            $packageThresholds[$pattern] = $now->modify("-{$hours} hours");
+        }
+
+        $result = (new PackageFilter($this->publishedTime))->filter(
+            $event->getPackages(),
+            null,
+            $this->config->whitelist,
+            $this->lockedVersions,
+            $this->securityGate,
+            $packageThresholds
+        );
+
+        $this->report($result, $this->securityGate);
+
+        $event->setPackages($result->keptPackages);
+    }
+
+    private function announceNativeCooldown(): void
+    {
+        if ($this->cooldownState === CooldownState::Disabled) {
+            $this->io->write(
+                '<info>[Soak Time] Composer\'s cooldown policy is turned off in the config, so fresh versions are not '
+                .'held back. Integrity checks remain enabled.</info>'
+            );
+
+            return;
+        }
+
+        if ($this->cooldownState === CooldownState::Unconfigured) {
+            $this->io->writeError(
+                '<warning>[Soak Time] SOAK_TIME_SKIP=1: fresh versions are not held back in this run. Integrity checks '
+                .'remain enabled.</warning>'
+            );
+
+            return;
+        }
+
+        if ($this->cooldownBypassed) {
+            $this->io->write(
+                '<info>[Soak Time] Composer\'s cooldown policy is bypassed for this run. Integrity checks remain enabled.</info>'
+            );
+
+            return;
+        }
+
+        $periodSeconds = $this->periodSupplied ? $this->config->minHours * 3600 : $this->nativeCooldown?->periodSeconds();
+        $source = $this->periodSupplied ? 'set by soak-time' : 'from '.$this->nativeCooldown?->periodSource();
+
+        $this->io->write(sprintf(
+            '<info>[Soak Time] Composer\'s cooldown policy holds back %s (%s)%s.</info>',
+            $periodSeconds === null ? 'fresh releases' : 'releases younger than '.NativeCooldown::formatPeriod($periodSeconds),
+            $source,
+            $this->config->packageHours === []
+                ? ''
+                : sprintf('; soak-time applies %d per-package window(s)', count($this->config->packageHours))
+        ));
+
+        if (! $this->periodSupplied && $this->hoursConfigured) {
+            $this->io->writeError(sprintf(
+                '<warning>[Soak Time] soak-time-hours / SOAK_TIME_HOURS is not applied: the period comes from %s.</warning>',
+                $this->nativeCooldown?->periodSource()
+            ));
+        }
+
+        if (! $this->periodSupplied && $this->config->skipAllSoak) {
+            $this->io->writeError(
+                '<warning>[Soak Time] SOAK_TIME_SKIP=1 cannot turn off Composer\'s cooldown. Run with --no-cooldown instead.</warning>'
+            );
+        }
+
+        if ($this->securityGate !== null) {
+            foreach ($this->securityExemptions as $package) {
+                $this->reportSecurityOverride($package, $this->securityGate, "Composer's cooldown");
+            }
+        }
+
+        $this->securityExemptions = [];
+    }
+
+    /**
      * The security-fix override only matters when its window is shorter than
      * the soak window and there are locked versions to compare advisories
      * against; otherwise return null so no advisory lookups can ever happen.
      */
-    private function securityGate(PrePoolCreateEvent $event): ?SecurityFixGate
+    private function soakSecurityGate(PrePoolCreateEvent $event): ?SecurityFixGate
     {
         if ($this->config->securityHours >= $this->config->minHours || $this->lockedVersionsByName === []) {
             return null;
@@ -537,6 +790,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     private function report(FilterResult $result, ?SecurityFixGate $securityGate): void
     {
         $this->reportSecurityAdmitted($result, $securityGate);
+        $this->reportUnverified($result);
 
         $droppedCount = $result->droppedCount();
 
@@ -575,22 +829,44 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         foreach ($result->securityAdmittedByName as $name => $packages) {
-            $advisoryIds = array_map(
-                static fn ($advisory) => $advisory->advisoryId,
-                $securityGate->advisoriesAffectingLocked($name)
-            );
-
             foreach ($packages as $package) {
-                $this->io->writeError(sprintf(
-                    '<warning>[Soak Time] Security override: kept "%s" %s (%s) within the %dh security window '
-                    .'instead of the full %dh soak — it clears %s affecting the locked version.</warning>',
-                    $name,
-                    $package->getPrettyVersion(),
-                    $this->describeReleaseTime($package),
-                    $this->config->securityHours,
-                    $this->config->minHours,
-                    implode(', ', $advisoryIds)
-                ));
+                $this->reportSecurityOverride($package, $securityGate, sprintf('the full %dh soak', $this->hoursFor($name)));
+            }
+        }
+    }
+
+    private function reportSecurityOverride(PackageInterface $package, SecurityFixGate $securityGate, string $insteadOf): void
+    {
+        $this->io->writeError(sprintf(
+            '<warning>[Soak Time] Security override: allowed "%s" %s (%s) after the %dh security window '
+            .'instead of %s — it clears %s affecting the locked version.</warning>',
+            $package->getName(),
+            $package->getPrettyVersion(),
+            $this->describeReleaseTime($package),
+            $this->config->securityHours,
+            $insteadOf,
+            implode(', ', array_map(
+                static fn ($advisory) => $advisory->advisoryId,
+                $securityGate->advisoriesAffectingLocked($package->getName())
+            ))
+        ));
+    }
+
+    private function reportUnverified(FilterResult $result): void
+    {
+        foreach ($result->unverifiedByRepository as $repositoryName => $packages) {
+            $this->io->writeError(sprintf(
+                '<warning>[Soak Time] Could not verify the publication date of %d version(s) from %s — '
+                .'judged by the self-reported, backdatable "time" field%s</warning>',
+                count($packages),
+                $repositoryName,
+                $this->io->isVerbose() ? ':' : '. Run with -v to list them.'
+            ));
+
+            if ($this->io->isVerbose()) {
+                foreach ($packages as $package) {
+                    $this->io->writeError(sprintf('  - %s (%s)', $package->getPrettyName(), $package->getPrettyVersion()));
+                }
             }
         }
     }
@@ -689,7 +965,9 @@ class Plugin implements PluginInterface, EventSubscriberInterface
                 ),
             '<warning>            If Composer now fails to resolve dependencies, this is the likely cause. Options:</warning>',
             sprintf('<warning>              - Lower its soak time:  SOAK_TIME_PACKAGE_HOURS=%s:%d composer update</warning>', $name, $ageHours ?? 0),
-            sprintf('<warning>              - Lower all soak times: SOAK_TIME_HOURS=%d composer update</warning>', $ageHours ?? 0),
+            ...(PackageFilter::firstMatch($name, $this->config->packageHours) === null
+                ? [sprintf('<warning>              - Lower all soak times: SOAK_TIME_HOURS=%d composer update</warning>', $ageHours ?? 0)]
+                : []),
             sprintf('<warning>              - Whitelist it:         add "%s" to extra.soak-time-whitelist</warning>', $name),
             sprintf('<warning>              - One-run skip:        SOAK_TIME_SKIP=%s composer update</warning>', $name),
         ]);
