@@ -137,6 +137,25 @@ final class SecurityFixGateTest extends TestCase
     }
 
     #[Test]
+    public function it_fetches_every_locked_package_in_one_query_when_asked_up_front(): void
+    {
+        $repository = new FakeAdvisoryRepository([
+            'vendor/vulnerable' => [$this->advisory('vendor/vulnerable', 'CVE-2026-0001', '<2.1.0')],
+            'vendor/patched' => [$this->advisory('vendor/patched', 'CVE-2026-0002', '<1.0.0')],
+        ]);
+
+        $gate = new SecurityFixGate(
+            new \DateTimeImmutable('-72 hours'),
+            [$repository],
+            ['vendor/vulnerable' => ['2.0.0.0'], 'vendor/patched' => ['1.5.0.0'], 'vendor/clean' => ['3.0.0.0']]
+        );
+
+        $this->assertSame(['vendor/vulnerable'], $gate->vulnerableNames());
+        $this->assertTrue($gate->admits($this->package('vendor/vulnerable', '2.1.0'), new \DateTimeImmutable('-100 hours')));
+        $this->assertSame(1, $repository->fetchCount);
+    }
+
+    #[Test]
     public function it_matches_advisories_against_any_locked_version(): void
     {
         $gate = $this->gate(

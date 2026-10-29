@@ -2,6 +2,7 @@
 
 namespace Innobrain\SoakTime;
 
+use Composer\Package\AliasPackage;
 use Composer\Package\PackageInterface;
 use Composer\Package\RootPackageInterface;
 use Composer\Repository\PlatformRepository;
@@ -49,7 +50,7 @@ final class PackageFilter
      */
     public function filter(
         iterable $packages,
-        \DateTimeInterface $threshold,
+        ?\DateTimeInterface $threshold,
         array $whitelist,
         array $lockedVersions = [],
         ?SecurityFixGate $securityGate = null,
@@ -58,6 +59,7 @@ final class PackageFilter
         $kept = [];
         $droppedByName = [];
         $securityAdmittedByName = [];
+        $unverifiedByRepository = [];
 
         foreach ($packages as $package) {
             if ($package instanceof RootPackageInterface) {
@@ -84,8 +86,31 @@ final class PackageFilter
                 continue;
             }
 
-            $releaseDate = $this->publishedTime->releaseTime($package)->date;
+            // An alias reports its own stability, so judge the package it aliases to keep the pair consistent.
+            $target = $package instanceof AliasPackage ? $package->getAliasOf() : $package;
+
+            if ($target->isDev()) {
+                $kept[] = $package;
+
+                continue;
+            }
+
             $effectiveThreshold = self::firstMatch($package->getName(), $packageThresholds) ?? $threshold;
+
+            if ($effectiveThreshold === null) {
+                $kept[] = $package;
+
+                continue;
+            }
+
+            $this->publishedTime->assertProvided($target);
+
+            $releaseTime = $this->publishedTime->releaseTime($package);
+            $releaseDate = $releaseTime->date;
+
+            if ($releaseTime->source === ReleaseTimeSource::Committer && ! $package instanceof AliasPackage && $package->getRepository() !== null) {
+                $unverifiedByRepository[$package->getRepository()->getRepoName()][] = $package;
+            }
 
             if ($releaseDate === null || $releaseDate > $effectiveThreshold) {
                 if ($securityGate !== null && $securityGate->admits($package, $releaseDate)) {
@@ -103,7 +128,7 @@ final class PackageFilter
             $kept[] = $package;
         }
 
-        return new FilterResult($kept, $droppedByName, $securityAdmittedByName);
+        return new FilterResult($kept, $droppedByName, $securityAdmittedByName, $unverifiedByRepository);
     }
 
     /**

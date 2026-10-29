@@ -21,7 +21,9 @@ use Composer\Semver\Constraint\MultiConstraint;
  * of the release an attacker publishes), and still enforces a soak.
  *
  * Advisory lookups are lazy: one registry query per package name, made only
- * when a fresh version of a locked package is about to be dropped. A failed
+ * when a fresh version of a locked package is about to be dropped. On Composer
+ * 2.11+ the exemptions must exist before resolution starts, so vulnerableNames()
+ * fetches all locked packages in one query per repository instead. A failed
  * lookup fails closed — the version stays subject to the full soak window.
  */
 final class SecurityFixGate
@@ -77,26 +79,46 @@ final class SecurityFixGate
      */
     public function advisoriesAffectingLocked(string $name): array
     {
-        return $this->advisoriesByName[$name] ??= $this->fetchAdvisories($name);
+        return $this->advisoriesByName[$name] ??= $this->fetchAdvisories([$name])[$name] ?? [];
     }
 
     /**
-     * @return list<PartialSecurityAdvisory>
+     * @return list<string>
      */
-    private function fetchAdvisories(string $name): array
+    public function vulnerableNames(): array
     {
-        $lockedVersions = $this->lockedVersionsByName[$name] ?? [];
+        $pending = array_values(array_diff(array_keys($this->lockedVersionsByName), array_keys($this->advisoriesByName)));
+        $fetched = $this->fetchAdvisories($pending);
 
-        if ($lockedVersions === []) {
-            return [];
+        foreach ($pending as $name) {
+            $this->advisoriesByName[$name] = $fetched[$name] ?? [];
         }
 
-        $constraints = array_map(
-            static fn (string $version) => new Constraint('==', $version),
-            $lockedVersions
-        );
+        return array_keys(array_filter($this->advisoriesByName));
+    }
 
-        $constraintMap = [$name => MultiConstraint::create($constraints, false)];
+    /**
+     * @param  list<string>  $names
+     * @return array<string, list<PartialSecurityAdvisory>>
+     */
+    private function fetchAdvisories(array $names): array
+    {
+        $constraintMap = [];
+
+        foreach ($names as $name) {
+            $lockedVersions = $this->lockedVersionsByName[$name] ?? [];
+
+            if ($lockedVersions !== []) {
+                $constraintMap[$name] = MultiConstraint::create(
+                    array_map(static fn (string $version) => new Constraint('==', $version), $lockedVersions),
+                    false
+                );
+            }
+        }
+
+        if ($constraintMap === []) {
+            return [];
+        }
 
         $advisories = [];
 
@@ -113,8 +135,10 @@ final class SecurityFixGate
                 continue;
             }
 
-            foreach ($result['advisories'][$name] ?? [] as $advisory) {
-                $advisories[] = $advisory;
+            foreach ($result['advisories'] as $name => $found) {
+                foreach ($found as $advisory) {
+                    $advisories[$name][] = $advisory;
+                }
             }
         }
 

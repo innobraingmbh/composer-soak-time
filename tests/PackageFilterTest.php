@@ -3,9 +3,11 @@
 namespace Innobrain\SoakTime\Tests;
 
 use Composer\Advisory\PartialSecurityAdvisory;
+use Composer\Package\AliasPackage;
 use Composer\Package\Package;
 use Composer\Package\PackageInterface;
 use Composer\Package\RootPackage;
+use Composer\Repository\ArrayRepository;
 use Composer\Semver\VersionParser;
 use Innobrain\SoakTime\PackageFilter;
 use Innobrain\SoakTime\SecurityFixGate;
@@ -97,6 +99,85 @@ final class PackageFilterTest extends TestCase
 
         $this->assertSame([$package], $result->keptPackages);
         $this->assertSame(0, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_keeps_dev_versions_whether_fresh_or_undated(): void
+    {
+        $fresh = new Package('vendor/branch', 'dev-main', 'dev-main');
+        $fresh->setReleaseDate(new \DateTimeImmutable('-1 hour'));
+        $undated = new Package('vendor/branch', '1.9999999.9999999.9999999-dev', '1.x-dev');
+
+        $result = (new PackageFilter())->filter([$fresh, $undated], new \DateTimeImmutable('-168 hours'), []);
+
+        $this->assertSame([$fresh, $undated], $result->keptPackages);
+        $this->assertSame(0, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_judges_a_dev_alias_of_a_fresh_stable_version_by_the_stable_version(): void
+    {
+        $stable = new Package('vendor/aliased', '1.2.0.0', '1.2.0');
+        $stable->setReleaseDate(new \DateTimeImmutable('-1 hour'));
+        $alias = new AliasPackage($stable, '1.1.9999999.9999999-dev', '1.1.x-dev');
+
+        $result = (new PackageFilter())->filter([$stable, $alias], new \DateTimeImmutable('-168 hours'), []);
+
+        $this->assertSame([], $result->keptPackages);
+        $this->assertSame(2, $result->droppedCount());
+    }
+
+    #[Test]
+    public function it_keeps_a_stable_alias_of_a_dev_version(): void
+    {
+        $branch = new Package('vendor/aliased', 'dev-main', 'dev-main');
+        $branch->setReleaseDate(new \DateTimeImmutable('-1 hour'));
+        $alias = new AliasPackage($branch, '1.0.0.0', '1.0.0');
+
+        $result = (new PackageFilter())->filter([$branch, $alias], new \DateTimeImmutable('-168 hours'), []);
+
+        $this->assertSame([$branch, $alias], $result->keptPackages);
+    }
+
+    #[Test]
+    public function it_records_versions_judged_by_self_reported_time_by_repository(): void
+    {
+        $repository = new ArrayRepository();
+        $kept = $this->package('vendor/vcs', '1.0.0', '-30 days');
+        $dropped = $this->package('vendor/vcs', '2.0.0', '-1 hour');
+        $undated = $this->package('vendor/vcs', '3.0.0', null);
+        $repository->addPackage($kept);
+        $repository->addPackage($dropped);
+        $repository->addPackage($undated);
+        $detached = $this->package('vendor/detached', '1.0.0', '-30 days');
+
+        $result = (new PackageFilter())->filter(
+            [$kept, $dropped, $undated, $detached],
+            new \DateTimeImmutable('-168 hours'),
+            []
+        );
+
+        $this->assertSame([$repository->getRepoName() => [$kept, $dropped]], $result->unverifiedByRepository);
+    }
+
+    #[Test]
+    public function it_judges_only_packages_with_their_own_window_when_composer_owns_the_default(): void
+    {
+        $fresh = $this->package('vendor/fresh', '2.0.0', '-1 hour');
+        $undated = $this->package('vendor/undated', '1.0.0', null);
+        $ownWindow = $this->package('vendor/slow', '2.0.0', '-10 days');
+
+        $result = (new PackageFilter())->filter(
+            [$fresh, $undated, $ownWindow],
+            null,
+            [],
+            [],
+            null,
+            ['vendor/slow' => new \DateTimeImmutable('-14 days')]
+        );
+
+        $this->assertSame([$fresh, $undated], $result->keptPackages);
+        $this->assertArrayHasKey('vendor/slow', $result->droppedByName);
     }
 
     #[Test]

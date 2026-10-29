@@ -7,13 +7,15 @@ A Composer plugin that enforces a **soak time** — a minimum age — on every p
 
 A date filter alone is defeatable: an attacker can force-push an old tag at a malicious commit with a backdated `GIT_COMMITTER_DATE`, and Packagist serves that timestamp. Packagist.org locks the source and dist reference of **stable** versions and refuses moved tags ([composer/packagist#1742](https://github.com/composer/packagist/pull/1742), [docs](https://packagist.org/about/version-immutability)) — but only for stable versions on packagist.org. The plugin pins each version's git SHA, source URL, dist URL, and dist sha256 in `composer-integrity.lock`, extending that protection to dev versions, the local download cache, and non-packagist sources, and hard-fails on any later drift. See [SECURITY_MODEL.md](SECURITY_MODEL.md).
 
+**Composer 2.11+** has its own [cooldown](https://blog.packagist.com/composer-2-11-release/). There the plugin doesn't filter by itself: it configures Composer's cooldown from your soak-time settings and adds what Composer lacks — per-package windows, the security-fix window, stable locked versions and integrity pinning. Nothing to migrate; see [Composer 2.11](#-composer-211).
+
 ## 🧭 How it works
 
 Four checks run on every install/update:
 
 | Check | Hook | Catches |
 |---|---|---|
-| **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases — drops versions younger than the soak time from the solver pool. Versions already pinned in `composer.lock` are exempt. |
+| **Timestamp filter** (`PackageFilter`) | `PRE_POOL_CREATE` | Fresh malicious releases — drops versions younger than the soak time from the solver pool. Versions already pinned in `composer.lock` and dev versions (`dev-main`, `1.x-dev`) are exempt. On Composer 2.11+, Composer's cooldown does this and the plugin only judges packages with their own window. |
 | **Reference drift** (`ReferenceDriftCheck`) | `PRE_POOL_CREATE` | Altered historical releases — a backdated `GIT_COMMITTER_DATE` still changes the content-addressed SHA, which can't be forged. |
 | **Hash pinning** (`HashVerifier`) | `POST_FILE_DOWNLOAD` | Cache poisoning at `~/.composer/cache/files/` — re-hashes the downloaded archive (Composer's native sha1 is empty for GitHub zips). |
 | **Source pinning** (`PackageIntegrityRecorder`) | `POST_PACKAGE_INSTALL` / `POST_PACKAGE_UPDATE` | `--prefer-source` installs; fails closed if a dist install never exposes its archive. |
@@ -45,10 +47,25 @@ Default soak time is **168h (7 days)**. Configure via `extra` in `composer.json`
 
 - **Per-run override:** `SOAK_TIME_HOURS=336 composer update` (takes precedence; ignored with a warning if not a non-negative integer).
 - **Whitelist** bypasses the soak filter for trusted packages that update constantly. `*` is allowed in the **name** half only — the vendor must be a literal (`your-company/*`, `your-company/lib-*`). Vendor-side wildcards (`*/x`, `*/*`, `*`) are rejected. `SOAK_TIME_SKIP` accepts the same patterns.
-- Versions with no release date are filtered unless whitelisted. Whitelist path/internal repos only if you trust their metadata.
+- Versions with no release date are filtered unless whitelisted. Whitelist path/internal repos only if you trust their metadata. (On Composer 2.11+, Composer's cooldown lets them through.)
+- **Dev versions** (`dev-main`, `1.x-dev`) skip the soak filter, as in Composer's own cooldown: a branch is a moving target dated by its latest commit. Integrity checks still apply — see [dev branches](#dev-branches-soak-time-dev-branches).
 - **Already-locked versions are exempt.** The soak window gates *adopting* a fresh version during resolution; a version already pinned in `composer.lock` was adopted earlier, so it passes through. This keeps `composer install` deterministic and stops a partial update (`composer require x`) from failing on an unrelated, freshly-published dependency you already have locked. Adopting a *new* or bumped version still gets gated; the artifact itself is still guarded by the integrity checks.
 
 Windows PowerShell sets env vars as `$env:SOAK_TIME_HOURS=336; composer update`.
+
+### Publication times (`require-published-time`)
+
+Versions are judged by the registry's server-stamped `published-time`, which a publisher cannot backdate, falling back to the self-reported `time` field. On Composer 2.11+, a version from a Composer repository that serves no `published-time` fails the run — Composer's cooldown rule, which the plugin also applies to packages with their own window. For a repository you trust, opt out with Composer's own setting:
+
+```json
+{
+    "repositories": [
+        { "type": "composer", "url": "https://satis.example.com", "require-published-time": false }
+    ]
+}
+```
+
+VCS, path and artifact repositories only have `time`. Versions judged by `time` are named in a warning on every run (`-v` lists them). Composer versions before 2.11 keep the `time` fallback.
 
 ### Per-package soak time (`soak-time-package-hours`)
 
@@ -74,6 +91,8 @@ SOAK_TIME_PACKAGE_HOURS=guzzlehttp/guzzle:72 composer update guzzlehttp/guzzle
 
 Patterns follow the whitelist rules (literal vendor, `*` only in the name half); the first matching entry wins, and env entries beat `composer.json` ones. This is the scoped alternative to lowering `SOAK_TIME_HOURS` globally: every other package keeps the full window. Versions with no release date are still dropped — use the whitelist for full bypass.
 
+On Composer 2.11+ these packages are exempted from Composer's cooldown and judged by the plugin instead. `composer outdated` only knows Composer's period, so it may list a version that the package's own window still holds back.
+
 ### Security-fix window (`soak-time-security-hours`)
 
 When the version you have **locked** is affected by a published security advisory, waiting out the full soak window means running known-vulnerable code for a week. The scoped security override shortens the wait for exactly the versions that fix it: a version younger than the soak window is still admitted if it
@@ -92,6 +111,8 @@ When the version you have **locked** is affected by a published security advisor
 Per-run override: `SOAK_TIME_SECURITY_HOURS=48 composer update`. Set it to a value ≥ `soak-time-hours` to disable the override entirely (no advisory lookups are made then).
 
 This codifies the "temporarily run with `SOAK_TIME_HOURS=72`" routine with a much smaller attack surface: the shorter window applies per package, only while your locked version is known-vulnerable, and the admitted fix still has to soak. Every admission is reported loudly with the advisory IDs that justified it. Advisory lookups happen lazily — only for a locked package whose fresh version would otherwise be dropped — and a failed lookup falls back to the full soak window. See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the residual risks.
+
+On Composer 2.11+ the fix gets an exact-version exemption from Composer's cooldown, which has to exist before Composer starts resolving. So `update`, `require` and `remove` check all locked packages up front, in one advisory query per repository. Composer's cooldown deliberately has no such window; it expects you to run `composer update --no-cooldown vendor/package` yourself.
 
 ### Dev branches (`soak-time-dev-branches`)
 
@@ -173,11 +194,50 @@ Security fixes for advisories affecting your locked versions are admitted automa
 SOAK_TIME_SKIP=vendor/package composer update vendor/package
 ```
 
-`SOAK_TIME_SKIP=1` skips freshness for the whole run.
+`SOAK_TIME_SKIP=1` skips freshness for the whole run. On Composer 2.11+ with a cooldown period of your own, use `--no-cooldown` instead.
+
+## 🧩 Composer 2.11
+
+Composer 2.11 ships a native cooldown (`config.policy.cooldown`). From that version on, Composer does the filtering and the plugin only adds what Composer doesn't have:
+
+| | Composer 2.11+ with soak-time |
+|---|---|
+| Base window | Composer's cooldown. If the project and global config set no period, the plugin supplies `soak-time-hours` (default 7 days) at runtime. A period you configure in `policy.cooldown` or `COMPOSER_POLICY_COOLDOWN_PERIOD` wins. |
+| Whitelist, `SOAK_TIME_SKIP=vendor/pkg` | Added to the cooldown's `ignore` rules. |
+| Per-package windows | Exempted from the cooldown and judged by the plugin. |
+| Security-fix window | The fix gets an exact-version exemption from the cooldown. |
+| Locked versions | Every locked version is exempted, so a full `composer update` never downgrades one. Composer alone re-checks them and may. |
+| Integrity pinning | Unchanged. |
+| `--no-cooldown` | Turns off the cooldown and the plugin's per-package windows for that run. |
+| `SOAK_TIME_SKIP=1` | Supplies no period for that run. It can't turn off a period you configured yourself; use `--no-cooldown`. |
+| Cooldown turned off (`policy: false`, `cooldown: false`, `block: false`) | Respected: fresh versions aren't held back. |
+
+Supplying the period happens in memory only, so `composer.lock` is not marked outdated. Because Composer itself filters, `composer require` picks a version the cooldown allows, `outdated` and `show --latest` report held-back releases, and Composer's own messages explain what was withheld.
+
+### Moving the settings into `composer.json`
+
+You don't have to, but you can move `soak-time-hours` and `soak-time-whitelist` into Composer's own config:
+
+```bash
+composer soak-time:migrate --dry-run   # preview
+composer soak-time:migrate
+composer update --lock                 # the policy change marks composer.lock as outdated
+```
+
+The other settings stay in `extra` and keep working through the plugin. Migrate only once everyone on the project uses Composer 2.11+: older versions ignore `policy.cooldown`, and the plugin then falls back to its defaults. For a global install, set the period globally instead: `composer config --global policy.cooldown.period "7 days"`.
+
+| soak-time | Composer 2.11 cooldown |
+|---|---|
+| `soak-time-hours: 168` | `policy.cooldown.period: "7 days"` |
+| `soak-time-whitelist` | `policy.cooldown.ignore` |
+| `SOAK_TIME_HOURS` | `COMPOSER_POLICY_COOLDOWN_PERIOD` |
+| `SOAK_TIME_SKIP=1` | `--no-cooldown` |
 
 ## 🔍 Troubleshooting
 
 Run `composer update -v` to see dropped versions. If the soak time hides **every** version of a required package, resolution fails — the plugin names the package and its newest version's age up front. Fix with a scoped `SOAK_TIME_PACKAGE_HOURS=vendor/package:X` (preferred), a global `SOAK_TIME_HOURS=X`, whitelisting it, or a one-run `SOAK_TIME_SKIP`.
+
+If the run fails with `... has no published-time`, that Composer repository serves no server-stamped publication times. Set [`"require-published-time": false`](#publication-times-require-published-time) on it to fall back to the weaker `time` field, or whitelist the package.
 
 ## 🙏 Credits & License
 
